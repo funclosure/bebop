@@ -1,0 +1,6 @@
+{
+  "name": "bebop",
+  "description": "Set up Bebop: a hub on this machine, the app on your phone, and a chief-of-staff companion session that you talk to from it.",
+  "version": "0.1.0",
+  "keywords": ["setup", "companion", "chief of staff", "hub"]
+}

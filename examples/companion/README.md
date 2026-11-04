@@ -1,6 +1,6 @@
 # Example: a durable companion on the hub
 
-A folder that turns a Claude Code session into a long-running companion: one identity across restarts, a journal, a task ledger, and the hub app as its way to reach you. Copy it, give it a name, and run it in its own terminal pane.
+A folder that turns a Claude Code session into a long-running companion, your chief of staff: one identity across restarts, a journal, a task ledger, the hub app as its way to reach you, and other Claude Code sessions (its peers) to hand project work to. `/bebop:setup` builds one for you; this README is the manual way. Copy it, give it a name, and run it in its own terminal pane.
 
 The hub is the client and the message system; this folder is one way to build an agent on it. Nothing here is required to use the hub.
 
@@ -18,21 +18,27 @@ The hub is the client and the message system; this folder is one way to build an
 | `bin/restart` | Ends the session so `bin/companion` starts a fresh one (the `/new` command). |
 | `bin/presence` | Hook that shows "thinking" / "Running a command…" in the app. |
 | `.mcp.json` | The hub's MCP server for sending (`reply`, `ask`, …); `HUB_INBOUND=off` because `bin/hub-watch` does the receiving. |
+| `hub.env` | (you write it) which checkout and hub this companion uses: `HUB_HOME`, `HUB_URL`, `HUB_TOKEN_FILE`. |
 
 ## Set it up
 
 1. Run the hub and open the app on your phone (see the main README).
 2. Copy this folder somewhere of its own and make it a git repo (the companion commits its memory and journal):
    ```sh
-   cp -R examples/companion ~/companions/sam && cd ~/companions/sam && git init
+   cp -R /path/to/bebop/examples/companion ~/companions/sam && cd ~/companions/sam && git init
+   ```
+   Then write `hub.env` there, so the companion finds the checkout and its hub (`bin/companion` reads it):
+   ```sh
+   HUB_HOME=/path/to/bebop
+   HUB_URL=http://127.0.0.1:8787
+   HUB_TOKEN_FILE=/path/to/bebop/data/agent.token   # the hub's HUB_DATA_DIR/agent.token
    ```
 3. Fill in `SOUL.md` and `USER.md`.
-4. Point it at the hub checkout and start it in its own pane:
+4. Start it in its own terminal pane (a [herdr](https://herdr.dev) tab, a tmux window, a plain terminal tab):
    ```sh
-   export HUB_HOME=/path/to/bebop
-   bin/companion
+   bin/companion --fresh
    ```
-   Approve the `hub` MCP server the first time. Inside the repo, `HUB_HOME` defaults to the checkout this folder sits in.
+   `--fresh` the first time: otherwise Claude Code continues the folder's latest conversation, which is the setup session if you ran `/bebop:setup` here. The `hub` MCP server is already approved in `.claude/settings.json`. Without `hub.env`, `HUB_HOME` defaults to the checkout this folder sits in and the hub to `http://127.0.0.1:8787`.
 
 Needs `zsh`, `jq`, `bun` and `python3`. Optional: `COMPANION_CHANNELS` to load other channels too (e.g. `plugin:telegram@claude-plugins-official`); `COMPANION_IDLE_MIN` and `COMPANION_CONTEXT_MB` for the idle restart.
 

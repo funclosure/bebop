@@ -7,12 +7,17 @@
 #   - Any other exit (crash, /exit) → relaunch with --continue after 10 s; Ctrl-C
 #     during the countdown stops the loop. Two quick exits in a row → --fresh;
 #     three → stop.
+# Settings: hub.env in this folder (written by /bebop:setup), if there: HUB_HOME, HUB_URL,
+# HUB_TOKEN_FILE. Otherwise the environment, or these defaults:
 # Env: HUB_HOME (the Bebop checkout; default: the repo this folder sits in),
 #      COMPANION_CHANNELS (optional, e.g. plugin:telegram@claude-plugins-official).
 set -u
 home=${0:A:h:h}
 cd "$home" || exit 1
+[[ -f hub.env ]] && { set -a; source ./hub.env; set +a }
 export HUB_HOME=${HUB_HOME:-${home:h:h}}
+export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}
+export HUB_TOKEN_FILE=${HUB_TOKEN_FILE:-$HUB_HOME/data/agent.token}
 export COMPANION_LOOP=1
 channels=${COMPANION_CHANNELS-}
 quick=60        # a session shorter than this (seconds) counts as a quick exit

@@ -1,11 +1,19 @@
 {
   "name": "bebop",
-  "owner": { "name": "bebop" },
+  "owner": {
+    "name": "bebop"
+  },
+  "description": "Bebop: a phone app and message hub for your own Claude Code sessions, and a setup skill for a chief-of-staff companion.",
   "plugins": [
     {
       "name": "hub",
       "source": "./channel",
       "description": "Claude Code channel for Bebop."
+    },
+    {
+      "name": "bebop",
+      "source": "./plugin",
+      "description": "/bebop:setup: set up the hub, the phone app and your chief-of-staff companion, step by step."
     }
   ]
 }

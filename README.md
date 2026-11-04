@@ -2,6 +2,8 @@
 
 A phone-first client and message system for your own Claude Code session. You run the hub on the machine where the session lives; your phone talks to it as an installed web app over your Tailscale network; the session talks to it through a Claude Code channel. Nothing goes through a third-party chat service.
 
+The idea: **one session is your chief of staff.** It's the one you talk to, from your phone or any browser. It keeps the context (memory, a journal, a task list), finds the right project session for each piece of work and hands it over, follows up, and proposes a new project when nothing fits. The other Claude Code sessions on the machine are its peers: it routes work to them, and you can look at their screens when you need to. Bebop is what makes that work: the app, the hub that carries the messages, and a template for the companion (`examples/companion/`).
+
 What you get, compared with talking to a session over a chat bot:
 
 - **Durable delivery.** The hub keeps every message until the session has it. Anything sent while the session was down arrives when it comes back.
@@ -22,6 +24,23 @@ PWA (phone, browser) ──HTTPS via tailscale serve──▶ hub (Bun, SQLite) 
 - `examples/refine.sh`: a dictation refiner on `claude -p` (see Dictation). Optional.
 - `examples/companion/`: a durable, always-on companion built on the hub (identity in files, journal, task ledger, crash relaunch, idle restart). Optional.
 - `data/` (gitignored): `hub.sqlite`, `files/`, `vapid.json`, `agent.token`.
+
+## Start here
+
+**With the setup skill** (recommended). Make an empty folder for your companion, open Claude Code there, and run the skill. It asks before each step that touches the system:
+
+```sh
+mkdir ~/companions/sam && cd ~/companions/sam && claude
+```
+```
+/plugin marketplace add funclosure/bebop
+/plugin install bebop@bebop
+/bebop:setup
+```
+
+It checks the tools, runs the hub as a background service, sets up the phone app over Tailscale, interviews you for the companion's persona, turns the folder into the companion, and starts it. A path works instead of `funclosure/bebop` for a local checkout.
+
+**By hand**: the sections below, in order: Requirements, Run it, Keep it running, Expose it on your tailnet, Lock, then `examples/companion/README.md` for the companion.
 
 ## Requirements
 
@@ -47,7 +66,25 @@ HUB_AGENT_NAME="My Companion" bun run hub      # http://127.0.0.1:8787
 bun test
 ```
 
-With `HUB_ALLOWED_LOGINS` unset the hub runs in dev mode: it accepts direct requests from localhost that carry no Tailscale login header, and logs a warning.
+With `HUB_ALLOWED_LOGINS` unset the hub runs in dev mode: it accepts direct requests from localhost that carry no Tailscale login header, and logs a warning. Set it to your Tailscale login before you expose the hub; this prints it:
+
+```sh
+tailscale status --json | jq -r '.User[(.Self.UserID|tostring)].LoginName'
+HUB_ALLOWED_LOGINS=you@example.com HUB_AGENT_NAME="My Companion" bun run hub
+```
+
+**More than one hub on a machine** (say, a second companion): give each its own `HUB_PORT` and `HUB_DATA_DIR`. The companion that uses it needs the same port in `HUB_URL` and that data dir's `agent.token` in `HUB_TOKEN_FILE` (the companion's `hub.env`, see `examples/companion/README.md`).
+
+## Keep it running
+
+`bun run hub` stops when its terminal closes. To keep it up and start it at login, run it as a service. `/bebop:setup` writes the file for you. By hand, on macOS, a LaunchAgent `~/Library/LaunchAgents/dev.bebop.<name>.plist` with `ProgramArguments` = the absolute path of `bun` and `hub/main.ts`, `WorkingDirectory` = this checkout, the `HUB_*` settings under `EnvironmentVariables` (plus a `PATH` that includes `bun`), and `RunAtLoad` and `KeepAlive` true. Then:
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.bebop.<name>.plist   # start, and at every login
+launchctl kickstart -k gui/$(id -u)/dev.bebop.<name>                             # restart after an update
+```
+
+On Linux, a systemd user unit (`~/.config/systemd/user/bebop.service`, `Restart=always`) and `systemctl --user enable --now bebop`.
 
 ## Expose it on your tailnet
 
@@ -56,6 +93,8 @@ Run this on the same machine (it gives the PWA HTTPS with a real certificate, so
 ```sh
 tailscale serve --bg 8787
 ```
+
+That takes the machine's root address (`https://<machine>.<tailnet>.ts.net`). If it's already used (`tailscale serve status`), serve the hub on another HTTPS port instead: `tailscale serve --bg --https=8443 8787`, and open `https://<machine>.<tailnet>.ts.net:8443`.
 
 `tailscale serve` adds a `Tailscale-User-Login` header to each request. Set `HUB_ALLOWED_LOGINS` to the logins that may use the app. Open the `https://<machine>.<tailnet>.ts.net` URL on your phone, add it to the Home Screen (iOS needs this for notifications), open it from there and tap the bell.
 
