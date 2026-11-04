@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Update this companion's Bebop files from a Bebop checkout, keeping everything that's yours.
+
+  bin/update [--dry] [--no-commit] [--checkout DIR] [--folder DIR]
+  bin/update --record              note the Bebop files as installed now (setup runs this)
+  bin/update --accept FILE...      you've merged FILE by hand: mark it as based on Bebop's version
+
+Bebop's files (OWNED below) are replaced when you haven't changed them. If you have, yours stays
+and Bebop's new version is written next to it as FILE.bebop-new; merge what you want, then run
+`bin/update --accept FILE`. Two files are merged instead of replaced: .claude/settings.json
+(Bebop's hooks, permissions and MCP approval are added; your own entries stay) and .gitignore
+(missing lines are added). Your files are never touched: SOUL.md, USER.md, MEMORY.md, CLAUDE.md,
+NOW.md, memory/, journal/, tasks/, hub.env, setup-notes.md.
+
+.bebop.json records, for each Bebop file, the hash of the Bebop version it's based on. Without it
+(a companion set up before this existed), a file that differs from Bebop's counts as yours.
+The checkout is HUB_HOME from hub.env (or --checkout). If the checkout's bin/update is a
+different version, it runs that one, so the newest rules and file list always apply.
+Python 3, standard library only.
+"""
+from __future__ import annotations
+
+import argparse, hashlib, json, os, shutil, subprocess, sys
+from pathlib import Path
+
+# Bebop's files in a companion folder. Paths relative to the folder.
+OWNED = [
+    "BEBOP.md", ".mcp.json",
+    "bin/companion", "bin/hub-env", "bin/hub-watch", "bin/idle-check", "bin/idle-watch",
+    "bin/presence", "bin/recall", "bin/restart", "bin/task", "bin/update",
+]
+MERGED = [".claude/settings.json", ".gitignore"]
+RECORD = ".bebop.json"
+TEMPLATE = Path("examples/companion")
+
+
+def sha(p: Path) -> str | None:
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+
+
+def read_env(folder: Path) -> dict:
+    """hub.env as KEY=value lines (the same rules as bin/hub-env)."""
+    out, f = {}, folder / "hub.env"
+    if f.is_file():
+        for line in f.read_text().splitlines():
+            k, _, v = line.partition("=")
+            if not k.strip() or k.lstrip().startswith("#") or not _:
+                continue
+            v = v.split(" #")[0].strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            out[k.strip()] = v
+    return out
+
+
+def commit_of(checkout: Path) -> str:
+    r = subprocess.run(["git", "-C", str(checkout), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else "unknown"
+
+
+def merge_settings(mine: dict, theirs: dict) -> dict:
+    """Bebop's settings into yours: Bebop's own hooks (commands under bin/) are replaced by its
+    current ones, other hooks stay; permission and MCP lists are joined; other keys are added
+    only when you don't have them."""
+    out = json.loads(json.dumps(mine))
+    bebop_cmd = lambda h: '/bin/' in json.dumps(h) and '$CLAUDE_PROJECT_DIR' in json.dumps(h)
+    hooks = out.setdefault("hooks", {})
+    for event, entries in (theirs.get("hooks") or {}).items():
+        kept = [e for e in hooks.get(event, []) if not bebop_cmd(e)]
+        hooks[event] = kept + entries
+    for key in ("allow", "deny", "ask"):
+        add = (theirs.get("permissions") or {}).get(key)
+        if add:
+            cur = out.setdefault("permissions", {}).setdefault(key, [])
+            cur += [x for x in add if x not in cur]
+    if theirs.get("enabledMcpjsonServers"):
+        cur = out.setdefault("enabledMcpjsonServers", [])
+        cur += [x for x in theirs["enabledMcpjsonServers"] if x not in cur]
+    for k, v in theirs.items():
+        if k not in ("hooks", "permissions", "enabledMcpjsonServers") and k not in out:
+            out[k] = v
+    return out
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Update this companion's Bebop files.")
+    ap.add_argument("--dry", action="store_true", help="only say what would change")
+    ap.add_argument("--no-commit", action="store_true", help="don't commit in the companion's git repo")
+    ap.add_argument("--record", action="store_true", help="note the Bebop files as installed now")
+    ap.add_argument("--accept", nargs="+", metavar="FILE", help="FILE now includes Bebop's version")
+    ap.add_argument("--checkout", help="the Bebop checkout (default: HUB_HOME from hub.env)")
+    ap.add_argument("--folder", help="the companion folder (default: the one this script is in)")
+    ap.add_argument("--no-handoff", action="store_true", help=argparse.SUPPRESS)
+    a = ap.parse_args(argv)
+
+    folder = Path(a.folder or Path(__file__).resolve().parent.parent).resolve()
+    env = read_env(folder)
+    checkout = Path(a.checkout or env.get("HUB_HOME") or os.environ.get("HUB_HOME") or "").expanduser()
+    if not str(checkout) or not (checkout / TEMPLATE / "bin/update").is_file():
+        print(f"bin/update: no Bebop checkout found (HUB_HOME in hub.env, or --checkout): {checkout or '(unset)'}", file=sys.stderr)
+        return 2
+    template = (checkout / TEMPLATE).resolve()
+
+    # Run the checkout's own bin/update when it differs: its rules and file list are the new ones.
+    newest = template / "bin/update"
+    if not a.no_handoff and sha(newest) != sha(Path(__file__).resolve()):
+        args = [sys.executable, str(newest), "--no-handoff", "--folder", str(folder), "--checkout", str(checkout)]
+        args += [x for x in (argv if argv is not None else sys.argv[1:])]
+        return subprocess.run(args).returncode
+
+    rec_path = folder / RECORD
+    rec = json.loads(rec_path.read_text()) if rec_path.is_file() else {}
+    base = dict(rec.get("files") or {})
+    commit = commit_of(checkout)
+
+    def save():
+        rec_path.write_text(json.dumps({"bebop": commit, "checkout": str(checkout), "files": dict(sorted(base.items()))}, indent=2) + "\n")
+
+    if a.record:
+        for f in OWNED:
+            if (folder / f).is_file():
+                base[f] = sha(folder / f)
+        save()
+        print(f"recorded {len(base)} Bebop files (Bebop {commit})")
+        return 0
+
+    if a.accept:
+        for f in a.accept:
+            f = f.removesuffix(".bebop-new")
+            if f not in OWNED:
+                print(f"not a Bebop file: {f}", file=sys.stderr); return 2
+            base[f] = sha(template / f)
+            (folder / (f + ".bebop-new")).unlink(missing_ok=True)
+            print(f"accepted {f}")
+        save()
+        return 0
+
+    done, conflicts, notes = [], [], []
+    for f in OWNED:
+        new, cur, b = template / f, folder / f, base.get(f)
+        hn, hc = sha(new), sha(cur)
+        if hn is None:
+            continue
+        if hc == hn:
+            base[f] = hn                                   # already Bebop's current version
+        elif hc is None:
+            done.append(("add", f)); base[f] = hn
+        elif b is not None and hc == b:
+            done.append(("update", f)); base[f] = hn       # you didn't change it: replace
+        elif b is not None and hn == b:
+            pass                                           # yours changed, Bebop's didn't
+        else:
+            conflicts.append(f)                            # both changed (or no record yet)
+    # Files Bebop no longer ships: remove them only if unchanged.
+    for f in sorted(set(base) - set(OWNED)):
+        cur = folder / f
+        if sha(cur) == base[f]:
+            done.append(("remove", f))
+        elif cur.is_file():
+            notes.append(f"{f}: Bebop no longer uses it; yours is changed, so it stays")
+        base.pop(f, None)
+
+    merged = []
+    s_new, s_cur = template / ".claude/settings.json", folder / ".claude/settings.json"
+    if s_new.is_file():
+        theirs = json.loads(s_new.read_text())
+        mine = json.loads(s_cur.read_text()) if s_cur.is_file() else {}
+        out = merge_settings(mine, theirs)
+        if out != mine:
+            merged.append((".claude/settings.json", json.dumps(out, indent=2) + "\n"))
+    g_new, g_cur = template / ".gitignore", folder / ".gitignore"
+    if g_new.is_file():
+        have = g_cur.read_text().splitlines() if g_cur.is_file() else []
+        add = [l for l in g_new.read_text().splitlines() if l.strip() and l not in have]
+        if add:
+            merged.append((".gitignore", "\n".join(have + add) + "\n"))
+
+    for kind, f in done: print(f"{kind:7} {f}")
+    for f, _ in merged: print(f"merge   {f}")
+    for f in conflicts: print(f"yours   {f}  (changed here and in Bebop: Bebop's version goes to {f}.bebop-new)")
+    cm = folder / "CLAUDE.md"
+    if cm.is_file() and "@BEBOP.md" not in cm.read_text():
+        notes.append("CLAUDE.md doesn't load BEBOP.md (it's from before the split): replace its Bebop part "
+                     "(from '## When running on Claude Code') with a line '@BEBOP.md', keeping your own additions")
+    for n in notes: print(f"note    {n}")
+    if not (done or merged or conflicts):
+        print(f"up to date with Bebop {commit}")
+    if a.dry:
+        if done or merged or conflicts: print("(dry run: nothing changed)")
+        return 0
+
+    for kind, f in done:
+        src, dst = template / f, folder / f
+        if kind == "remove":
+            dst.unlink(missing_ok=True); continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    for f, text in merged:
+        (folder / f).parent.mkdir(parents=True, exist_ok=True)
+        (folder / f).write_text(text)
+    for f in conflicts:
+        shutil.copy2(template / f, folder / (f + ".bebop-new"))
+    save()
+
+    if not a.no_commit and (folder / ".git").exists() and (done or merged):
+        paths = [f for _, f in done] + [f for f, _ in merged] + [RECORD]
+        subprocess.run(["git", "-C", str(folder), "add", "-A", "--", *paths], check=False)
+        subprocess.run(["git", "-C", str(folder), "commit", "-q", "-m", f"Update from Bebop {commit}", "--", *paths], check=False)
+    if conflicts:
+        print("\nTo finish: compare each FILE with FILE.bebop-new, merge what you want into FILE, then run:")
+        print("  bin/update --accept " + " ".join(conflicts))
+    if done or merged:
+        print("\nRestart the companion to load the new files (/new in the app, or bin/restart).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

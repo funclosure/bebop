@@ -127,13 +127,14 @@ Then walk them through it on the phone, and wait until they say it's done:
    HUB_TOKEN_FILE="DATA/agent.token"
    ```
    Use absolute paths and quote each value. The scripts read it as plain `KEY=value` lines (never `source`), so a value may contain spaces.
-3. Fill in `SOUL.md` from the interview: the name as the title, the voice under "How you talk", the never-do list under "Authority", and their main goals under "Current missions". Keep the "Your role: chief of staff" section. Fill in `USER.md`: name, languages, time zone, what they work on, where their projects live.
-4. `.claude/settings.json` already approves the `hub` MCP server (`enabledMcpjsonServers`), so they won't be asked about it.
-5. Check that the companion's scripts find this hub through `hub.env`, even without its settings in the environment (hooks run that way):
+3. Record Bebop's files, so `/bebop:update` can later tell them from the user's: `python3 bin/update --record` (it writes `.bebop.json`).
+4. Fill in `SOUL.md` from the interview: the name as the title, the voice under "How you talk", the never-do list under "Authority", and their main goals under "Current missions". Keep the "Your role: chief of staff" section. Fill in `USER.md`: name, languages, time zone, what they work on, where their projects live.
+5. `.claude/settings.json` already approves the `hub` MCP server (`enabledMcpjsonServers`), so they won't be asked about it.
+6. Check that the companion's scripts find this hub through `hub.env`, even without its settings in the environment (hooks run that way):
    - `echo '{}' | env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/presence --hook` prints nothing and exits 0.
    - `env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/task list` runs without an error.
    If either fails, fix `hub.env` before going on.
-6. `git init && git add -A && git commit -m "NAME: first day"`. The companion commits its memory and journal here; nothing is pushed.
+7. `git init && git add -A && git commit -m "NAME: first day"`. The companion commits its memory and journal here; nothing is pushed.
 
 ## 9. Start the companion
 
@@ -162,4 +163,5 @@ Tell them, briefly:
 - how to restart the hub (step 6) and the companion (`/new` in the app, or Ctrl-C in its pane and `bin/companion` again);
 - that the companion hands project work to other Claude Code sessions. Any session on this machine can be a peer. With herdr, the app's Sessions view also shows their screens;
 - that `setup-notes.md` holds anything that went wrong along the way;
+- that `/bebop:update` updates Bebop and the companion later, keeping SOUL, USER, memory, journal, tasks and `CLAUDE.md` as they are;
 - that this setup session can be closed now. The companion runs in its own pane.
