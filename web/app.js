@@ -850,9 +850,9 @@ const TOPIC_DOT = { you: 'red', others: 'amber', mine: 'green' }
 // it's red, which stays red. The chat shows the same live set; a project takes the worst of its
 // topics and pulses only if that came out green with a live topic.
 const presenceOn = (p = state.presence) => p.state !== 'idle' && Date.now() - p.updated < 10 * 60 * 1000
-function liveThreads({ presence = true } = {}) {
+function liveThreads({ presence = true, waiting = true } = {}) {
   const live = new Map() // thread id (null = main chat) -> what it's doing
-  for (const t of state.tasks) if (t.thread && (t.state === 'running' || t.state === 'waiting')) live.set(t.thread, t.detail || t.title)
+  for (const t of state.tasks) if (t.thread && (t.state === 'running' || (waiting && t.state === 'waiting'))) live.set(t.thread, t.detail || t.title)
   if (presence && presenceOn()) live.set(state.presence.thread ?? null, presenceText(state.presence))
   return live
 }
@@ -3200,10 +3200,14 @@ function renderPresence() {
   $('conn').classList.toggle('busy', active)
   const line = active ? presenceText(p) : null
   if (state.agentActive !== active || state.agentPresence !== line) { state.agentActive = active; state.agentPresence = line; renderSide() }
-  // The bubble follows the live threads: this chat's, or any of them in All, which holds them
-  // all. Presence stays out of it under a reply until its next update; a task doesn't.
-  const says = liveThreads({ presence: p.updated > presenceHiddenAt })
-  const text = state.thread == null ? says.get(null) ?? [...says.values()][0] : says.get(state.thread)
+  // The bubble is someone working right here: the agent's presence in this chat, or a running
+  // task in its own topic. A waiting task keeps its topic live (the dot) but never types, and
+  // All (the main chat, which shows every topic) shows only the agent's presence, wherever it
+  // is: another topic's task there read as the agent typing.
+  // Presence stays out of it under a reply until its next update; a task doesn't.
+  const fresh = p.updated > presenceHiddenAt
+  const says = liveThreads({ presence: fresh, waiting: false })
+  const text = state.thread == null ? (fresh && presenceOn(p) ? presenceText(p) : undefined) : says.get(state.thread)
   const show = !!text
   const el = $('typing')
   const wasHidden = el.hidden
