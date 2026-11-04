@@ -227,6 +227,7 @@ export const S = {
   iconSeedLine: n => `Made from the name, variant ${n}`,
   iconMore: 'More',
   iconOriginal: 'The original Bebop mark',
+  updateWaiting: 'A newer version is ready. Reload to use it.',
   iconClash: name => `Same turn and colour as ${name}`,
   iconLike: name => `like ${name}`,
   iconLess: 'Back',

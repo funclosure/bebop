@@ -65,7 +65,9 @@ test('hub: icons come from the name and the seed; the seed is set from Settings 
   expect(await (await user('/api/icon', { method: 'POST', body: '{"seed":3}', headers: { 'x-hub-action': '1' } })).json()).toEqual({ ok: true, seed: 3 })
   expect(await (await user('/icons/mark.svg')).text()).toBe(markSvg(markParams('Faye', 3), 'mark'))
   await user('/icons/icon-192.png')
-  expect(readdirSync(join(dataDir, 'app-icons')).filter(f => f.includes('-3-icon-192')).length).toBe(1) // drawn once, kept
+  await user('/icons/icon-192.png')
+  // Drawn once, kept, named after the drawing itself (a change to the rules gets a new file).
+  expect(readdirSync(join(dataDir, 'app-icons')).filter(f => f.startsWith(hash(markSvg(markParams('Faye', 3), 'icon')).toString(36) + '-192')).length).toBe(1)
   // -1: the original Bebop mark, whatever the name.
   expect(await (await agent('/agent/icon', { method: 'POST', body: '{"seed":-1}' })).json()).toEqual({ ok: true, seed: -1 })
   expect(await (await user('/icons/icon.svg')).text()).toBe(markSvg(markParams('Bebop'), 'icon'))
@@ -134,4 +136,12 @@ test('every variant: tails show the same past the label at every size, stay on t
     for (const l of [88, 104]) expect(Math.abs(showing[k.replace(/\/96$/, '/' + l)] - base)).toBeLessThan(0.08)
   }
   expect(checked).toBe(16 * 3 * 8 * 4) // every turn × size × tails (both = 2) × accent
+})
+
+test('the app\'s version is the service worker\'s cache name (Settings shows it)', () => {
+  const app = readFileSync(join(import.meta.dir, '..', 'web', 'app.js'), 'utf8')
+  const sw = readFileSync(join(import.meta.dir, '..', 'web', 'sw.js'), 'utf8')
+  const v = /const APP_VERSION = '(v\d+)'/.exec(app)?.[1]
+  expect(v).toBeTruthy()
+  expect(sw).toContain(`const CACHE = 'shell-${v}'`)
 })

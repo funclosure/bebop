@@ -993,7 +993,7 @@ body.col-dragging iframe { pointer-events: none; }
 .agent-off[hidden] { display: none; }
 
 /* Settings → Appearance: the icon and its variants. */
-.icon-pick-now { display: inline-flex; align-items: center; gap: 10px; }
+.icon-pick-now { display: inline-flex; align-items: center; gap: 14px; }
 .icon-now { width: 32px; height: 32px; border-radius: 8px; }
 .icon-grid-row { flex-direction: column; align-items: stretch; gap: 8px; }
 .icon-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; justify-items: center; }

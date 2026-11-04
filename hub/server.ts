@@ -2,7 +2,7 @@
 //   user side  (/, /api/*, /files/*)  authenticated by tailscale serve's login header
 //   agent side (/agent/*)             authenticated by a bearer token in data/agent.token
 import type { Server } from 'bun'
-import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, statSync, chmodSync } from 'fs'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, statSync, chmodSync, rmSync } from 'fs'
 import { open } from 'fs/promises'
 import { join, extname, basename, normalize, isAbsolute } from 'path'
 import { randomBytes, timingSafeEqual } from 'crypto'
@@ -1527,13 +1527,16 @@ export function createHub(opts: HubOptions) {
   }
   const iconSeed = () => Number((db.query("SELECT value FROM settings WHERE key = 'icon_seed'").get() as { value: string } | null)?.value ?? 0) || 0 // -1: the original mark
   const iconDir = join(dataDir, 'app-icons')
+  try { rmSync(iconDir, { recursive: true, force: true }) } catch {} // drawn again on demand
   function appIcon(path: string): Response | null {
     const f = ICON_FILES[path]
     if (!f) return null
     const p = markParams(agentName, iconSeed())
     const headers = { 'cache-control': 'no-cache' }
-    if (!f.size) return new Response(markSvg(p, f.kind), { headers: { ...headers, 'content-type': 'image/svg+xml' } })
-    const key = `${hash(agentName).toString(36)}-${iconSeed()}-${f.kind}-${f.size}.png`
+    const svg = markSvg(p, f.kind)
+    if (!f.size) return new Response(svg, { headers: { ...headers, 'content-type': 'image/svg+xml' } })
+    // Keyed by the drawing itself, so a change to the mark's rules never serves an old PNG.
+    const key = `${hash(svg).toString(36)}-${f.size}.png`
     const file = join(iconDir, key)
     if (!existsSync(file)) {
       mkdirSync(iconDir, { recursive: true })

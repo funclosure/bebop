@@ -3642,6 +3642,9 @@ function removePasskey(p, mine) {
   })
 }
 
+/** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
+const APP_VERSION = 'v100'
+
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
 // icon (SVG and PNG) from the seed, so changing it changes the header, the sidebar, the
@@ -3712,7 +3715,7 @@ const section = (title, rows, note) => h('section', { class: 'set-section' }, h(
 async function renderSettings() {
   const [ns, version] = await Promise.all([
     notifyStatus(),
-    caches.keys().then(k => k.find(x => x.startsWith('shell-')) ?? '').catch(() => ''),
+    Promise.resolve(APP_VERSION),
   ])
   const lockRows = [setRow(S.faceIdLock,
     !window.PublicKeyCredential ? S.lockUnsupported
@@ -3732,7 +3735,10 @@ async function renderSettings() {
     section(S.secNotifications, notifyRows, ns === 'install' ? S.installHint : null),
     section(S.secAppearance, appearanceRows(), S.iconHint),
     section(S.secAbout, [
-      setRow(S.version, version.replace('shell-', '') || '–'),
+      // The app's own version (it must match web/sw.js's cache name); an update waiting says so.
+      setRow(S.version, waitingWorker ? h('span', { class: 'icon-pick-now' }, version,
+        h('button', { type: 'button', class: 'set-btn plain', onclick: () => { saveDraft(); waitingWorker?.postMessage({ type: 'SKIP_WAITING' }) } }, S.reload)) : version,
+        waitingWorker ? S.updateWaiting : null),
       setRow(S.signedIn, state.login ?? '–'),
       setRow(S.hubAddress, location.host),
     ]))
