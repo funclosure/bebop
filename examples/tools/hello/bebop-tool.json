@@ -1,0 +1,13 @@
+{
+  "bebop": 1,
+  "id": "hello",
+  "name": "Hello",
+  "version": "0.2.0",
+  "description": "The smallest tool: a note pad per project, a page per topic plus an overview; posts a note into the page's topic.",
+  "icon": "icon.svg",
+  "scope": "project",
+  "frame": { "url": "/t/{instance}?page={page}&host=bebop", "link": "/t/{instance}?page={page}" },
+  "ref": ["note", "page"],
+  "serve": { "command": ["bun", "server.ts"], "port": 5180, "health": "/healthz" },
+  "agent": { "instructions": "Hello posts the user's notes from a project's note pad: hello_id is the project's pad, hello_page the page (the topic's page, or \"overview\"), hello_note the note's id; the note's text is in the message and in note.txt. Just answer in the topic." }
+}

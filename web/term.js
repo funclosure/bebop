@@ -225,7 +225,8 @@ export function layoutScreen(lines, opts = {}) {
     // A continuation: same box-ness, starts where the previous row's text does (or at
     // its margin), is not a new item, and its first word would not have fit on the
     // previous line: the agent wrapped it at the pane edge.
-    if (prev && prev.box === box && !mk && (lead === prev.indent || lead === prev.lead)) {
+    // `join: false` (a plain shell): its lines are what it printed, so none is joined.
+    if (opts.join !== false && prev && prev.box === box && !mk && (lead === prev.indent || lead === prev.lead)) {
       const word = firstWord(ctext)
       const tail = prev.lastChar
       const widthBefore = prev.endCol

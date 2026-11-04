@@ -36,8 +36,8 @@
           <button class="icon-btn" id="search-btn" type="button" aria-label="Search">
             <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m15 15 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
           </button>
-          <button class="icon-btn" id="panes-btn" type="button" aria-label="Sessions" hidden>
-            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+<button class="icon-btn" id="panes-btn" type="button" aria-label="Sessions" hidden>
+            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M11 3.5c.7 4.6 2.9 6.8 7.5 7.5-4.6.7-6.8 2.9-7.5 7.5-.7-4.6-2.9-6.8-7.5-7.5 4.6-.7 6.8-2.9 7.5-7.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" fill="none"/><path d="M18.5 3v3.5M16.75 4.75h3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>
             <span class="badge-dot" id="panes-dot" hidden></span>
           </button>
           <button class="icon-btn" id="peers-btn" type="button" aria-label="Peers" aria-haspopup="dialog">
@@ -152,6 +152,8 @@
           <h2><span id="panes-title"></span></h2>
           <div class="sheet-sub" id="panes-sub"></div>
         </div>
+        <!-- A terminal in this session's folder (>_), or, on that terminal, back to the session (×). -->
+        <button class="icon-btn pane-term-btn" id="pane-term-btn" type="button" aria-label="Open terminal" hidden><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></button>
         <button class="text-btn" id="panes-close" type="button"></button>
       </div>
       <div class="search-body" id="panes-list-body">
@@ -161,9 +163,16 @@
       <div class="pane-screen" id="pane-screen" hidden>
         <!-- The fleet at a glance; tap to switch to another session (or swipe the header). -->
         <button class="pane-fleet" id="pane-fleet" type="button" aria-haspopup="dialog"></button>
-        <div class="pane-text" id="pane-text" tabindex="0" role="log"><div class="pane-lines" id="pane-lines"></div></div>
+        <div class="pane-text" id="pane-text" tabindex="0" role="log">
+          <!-- Earlier turns, from the session's transcript (a session shows one screen at a time). -->
+          <div class="pane-hist" id="pane-hist" hidden><button class="pane-hist-more" id="pane-hist-more" type="button"></button><div class="pane-hist-items" id="pane-hist-items"></div></div>
+          <div class="pane-lines" id="pane-lines"></div>
+        </div>
         <!-- A question or permission dialog on the screen, as a card (web/dialog.js). -->
         <div class="pane-dialog" id="pane-dialog" hidden></div>
+        <!-- One of the hub's own shells: a confirm card for a risky command, and the shell's bar. -->
+        <div class="pane-dialog" id="pane-shell-confirm" hidden></div>
+        <div class="pane-shell" id="pane-shell" hidden></div>
         <!-- Raw keys: hidden until toggled, or shown when a dialog can't be read as a card. -->
         <div class="pane-keys" id="pane-keys" hidden></div>
         <!-- Dictation: speech → refined prompt in the line below, to review before sending. -->
@@ -199,19 +208,19 @@
     </section>
   </div>
 
-  <!-- A topic's board (Board, the whiteboard), embedded: a column beside the conversation on
-       wide windows, a full-screen sheet on the phone. See "board" in app.js. -->
-  <div class="col-resize" id="board-col-resize" role="separator" aria-orientation="vertical" tabindex="0"></div>
-  <section class="board-col" id="board" role="region" aria-labelledby="board-title" hidden>
-    <div class="board-head">
-      <div class="board-heading">
-        <h2 id="board-title"></h2>
-        <div class="board-status" id="board-status" aria-live="polite"></div>
+  <!-- A topic's tool (Board, the whiteboard, say), embedded: a column beside the conversation on
+       wide windows, a full-screen sheet on the phone. One open at a time. See "tools" in app.js. -->
+  <div class="col-resize" id="tool-col-resize" role="separator" aria-orientation="vertical" tabindex="0"></div>
+  <section class="tool-col" id="tool" role="region" aria-labelledby="tool-title" hidden>
+    <div class="tool-head">
+      <div class="tool-heading">
+        <h2 id="tool-title"></h2>
+        <div class="tool-status" id="tool-status" aria-live="polite"></div>
       </div>
-      <a class="text-btn board-open" id="board-open" target="_blank" rel="noopener"></a>
-      <button class="icon-btn small" id="board-close" type="button">✕</button>
+      <a class="text-btn tool-open" id="tool-open" target="_blank" rel="noopener"></a>
+      <button class="icon-btn small" id="tool-close" type="button">✕</button>
     </div>
-    <div class="board-frame" id="board-frame"></div>
+    <div class="tool-frame" id="tool-frame"></div>
   </section>
 
   <div class="viewer" id="viewer" hidden>
@@ -247,6 +256,18 @@
     </div>
   </div>
 
+  <div class="sheet-backdrop" id="share-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="share-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="share-title">Share a terminal</h2>
+          <div class="sheet-sub" id="share-sub"></div>
+        </div>
+      </div>
+      <ul class="sheet-body peer-list pane-list" id="share-list"></ul>
+    </div>
+  </div>
   <div class="sheet-backdrop" id="pane-pick-sheet" hidden>
     <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="pane-pick-title" tabindex="-1">
       <div class="sheet-grabber" aria-hidden="true"></div>

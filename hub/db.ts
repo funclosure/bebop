@@ -19,6 +19,13 @@ export type MessageRow = {
 
 export type FileRow = { id: string; name: string; mime: string; size: number; path: string; ts: number }
 
+function createToolInstances(db: Database) {
+  db.exec(`CREATE TABLE IF NOT EXISTS tool_instances (
+    tool TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'topic', scope_key TEXT NOT NULL, instance TEXT NOT NULL, created INTEGER NOT NULL,
+    PRIMARY KEY (tool, scope, scope_key), UNIQUE (tool, instance)
+  )`)
+}
+
 export function openDb(path: string): Database {
   const db = new Database(path, { create: true, strict: true })
   db.exec('PRAGMA journal_mode = WAL')
@@ -52,7 +59,15 @@ export function openDb(path: string): Database {
     -- A project's folder and icon, so one with topics but no live peer still has a face. See noteProjects in server.ts.
     CREATE TABLE IF NOT EXISTS projects (name TEXT PRIMARY KEY, path TEXT, icon TEXT, checked INTEGER);
     -- A topic's board (Board, the whiteboard): its own table, since POST /agent/threads rewrites thread_meta.
+    -- Before tools, Board had its own table; kept (read-only) so an older hub still finds its boards.
     CREATE TABLE IF NOT EXISTS boards (thread TEXT PRIMARY KEY, board TEXT NOT NULL UNIQUE, created INTEGER NOT NULL);
+    -- A project tool's pages (see tools.ts, scope): which topic each page posts into. A topic's page is
+    -- its thread id; "overview" posts into one topic the hub makes per project and tool (thread is
+    -- NULL until the first post). Kept here, since the agent's thread lists rewrite thread_meta.
+    CREATE TABLE IF NOT EXISTS tool_pages (
+      tool TEXT NOT NULL, scope_key TEXT NOT NULL, page TEXT NOT NULL, thread TEXT, title TEXT, created INTEGER NOT NULL,
+      PRIMARY KEY (tool, scope_key, page)
+    );
     CREATE TABLE IF NOT EXISTS lists_meta (name TEXT PRIMARY KEY, updated INTEGER);
     CREATE TABLE IF NOT EXISTS reads (thread TEXT PRIMARY KEY, last_id INTEGER NOT NULL);
     -- Every key press or prompt the user sent to a pane (v0.6), kept as an audit trail.
@@ -78,5 +93,18 @@ export function openDb(path: string): Database {
   // Tasks: the topic a background task belongs to, which keeps that topic live.
   const taskCols = (db.query('PRAGMA table_info(tasks)').all() as { name: string }[]).map(c => c.name)
   if (!taskCols.includes('thread')) db.exec('ALTER TABLE tasks ADD COLUMN thread TEXT')
+  // Tools: a tool's instance per topic (scope 'topic', scope_key = the thread id) or per project
+  // (scope 'project', scope_key = the project key, "desk" for none): made on first open, then kept,
+  // so its link stays the same. Before scopes the table was (tool, thread, instance, created).
+  const instCols = (db.query('PRAGMA table_info(tool_instances)').all() as { name: string }[]).map(c => c.name)
+  if (instCols.length && !instCols.includes('scope_key')) db.transaction(() => {
+    db.exec('ALTER TABLE tool_instances RENAME TO tool_instances_v1')
+    createToolInstances(db)
+    db.exec(`INSERT INTO tool_instances (tool, scope, scope_key, instance, created) SELECT tool, 'topic', thread, instance, created FROM tool_instances_v1`)
+    db.exec('DROP TABLE tool_instances_v1')
+  })()
+  else createToolInstances(db)
+  // Boards made before tools are Board's instances (idempotent, so safe on every start).
+  db.exec(`INSERT OR IGNORE INTO tool_instances (tool, scope, scope_key, instance, created) SELECT 'board', 'topic', thread, board, created FROM boards`)
   return db
 }

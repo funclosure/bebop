@@ -46,6 +46,8 @@ export function createLock(db: Database, opts: LockOptions = {}) {
     touch: db.query('UPDATE auth_sessions SET seen = ? WHERE hash = ?'),
     stepup: db.query('UPDATE auth_sessions SET seen = ?, stepup = ? WHERE hash = ?'),
     drop: db.query('DELETE FROM auth_sessions WHERE hash = ?'),
+    rename: db.query('UPDATE passkeys SET name = ? WHERE id = ?'),
+    remove: db.query('DELETE FROM passkeys WHERE id = ?'),
     prune: db.query('DELETE FROM auth_sessions WHERE created < ? OR seen < ?'), // seen: a day, so a long-open stream isn't cut
   }
   // Outstanding challenges, in memory (a restart just means asking again). Several at once,
@@ -203,8 +205,29 @@ export function createLock(db: Database, opts: LockOptions = {}) {
       q.used.run(v.authenticationInfo.newCounter, now, key.id)
       // An unlocked session is refreshed in place; otherwise a new one starts.
       const s = session(req)
-      if (s) { q.stepup.run(now, now, s.hash); return json({ ok: true }) }
-      return json({ ok: true }, 200, { 'set-cookie': newSession(login) })
+      // `id`: the passkey that unlocked, so the app can mark it "This device".
+      if (s) { q.stepup.run(now, now, s.hash); return json({ ok: true, id: key.id }) }
+      return json({ ok: true, id: key.id }, 200, { 'set-cookie': newSession(login) })
+    }
+
+    // Managing passkeys: a fresh Face ID, like adding one. The last passkey can't be removed
+    // here (that would turn the lock off); `bun scripts/passkeys.ts off` on the hub machine does that.
+    if (path === '/api/auth/passkeys/rename' || path === '/api/auth/passkeys/remove') {
+      if (req.headers.get('x-hub-action') !== '1' || !(req.headers.get('content-type') ?? '').startsWith('application/json')) return fail(403, 'X-Hub-Action header and a JSON body required')
+      const s = session(req)
+      if (!enabled() || !s || Date.now() - s.stepup > stepupMs) return fail(403, 'stepup required')
+      const b = await req.json().catch(() => null) as { id?: unknown; name?: unknown } | null
+      const id = typeof b?.id === 'string' ? b.id : ''
+      if (!id || !q.get.get(id)) return json({ error: 'no such passkey', code: 'not_found' }, 404)
+      if (path.endsWith('/rename')) {
+        const name = typeof b?.name === 'string' ? b.name.replace(/[\x00-\x1f\x7f\s]+/g, ' ').trim().slice(0, 60) : ''
+        if (!name) return fail(400, 'name: 1 to 60 characters')
+        q.rename.run(name, id)
+        return json({ ok: true, name })
+      }
+      if ((q.count.get() as { n: number }).n <= 1) return json({ error: 'the last passkey cannot be removed here', code: 'last_passkey' }, 409)
+      q.remove.run(id)
+      return json({ ok: true })
     }
 
     return fail(404, 'not found')

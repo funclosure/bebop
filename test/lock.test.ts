@@ -116,3 +116,32 @@ test('unlock options list the stored passkeys and require user verification', as
   expect((await ctx.user('/api/auth/login/verify', { method: 'POST', body: JSON.stringify({ response: { id: 'cred-1' } }) })).status).toBe(401)
   expect((await ctx.user('/api/auth/login/verify', { method: 'POST', body: '{}' })).status).toBe(400)
 })
+
+test('passkeys: rename and remove need a fresh unlock; the last one stays', async () => {
+  ctx = startHub({ lock: { stepupMs: 60_000 } })
+  addPasskey()
+  ctx.hub.db.query('INSERT INTO passkeys (id, login, public_key, counter, name, created) VALUES (?, ?, ?, 0, ?, ?)').run('cred-2', 'local', new Uint8Array([4]), 'Mac', Date.now())
+  const post = (path: string, body: unknown, headers: Record<string, string> = { ...cookie, 'x-hub-action': '1', 'content-type': 'application/json' }) =>
+    ctx.user(path, { method: 'POST', body: JSON.stringify(body), headers })
+  const names = () => (ctx.hub.db.query('SELECT id, name FROM passkeys ORDER BY created, id').all() as any[]).map(p => `${p.id}:${p.name}`)
+
+  // Locked, stale, or without the action header: refused.
+  expect((await post('/api/auth/passkeys/rename', { id: 'cred-2', name: 'x' }, { 'x-hub-action': '1', 'content-type': 'application/json' })).status).toBe(403)
+  addSession({ stepup: Date.now() - 61_000 })
+  expect((await post('/api/auth/passkeys/rename', { id: 'cred-2', name: 'x' })).status).toBe(403)
+  ctx.hub.db.query('UPDATE auth_sessions SET stepup = ?').run(Date.now())
+  expect((await post('/api/auth/passkeys/remove', { id: 'cred-2' }, cookie)).status).toBe(403)
+
+  const r = await post('/api/auth/passkeys/rename', { id: 'cred-2', name: '  Work\nMac  ' })
+  expect(await r.json()).toEqual({ ok: true, name: 'Work Mac' })
+  expect((await post('/api/auth/passkeys/rename', { id: 'cred-2', name: '   ' })).status).toBe(400)
+  expect((await post('/api/auth/passkeys/rename', { id: 'nope', name: 'a' })).status).toBe(404)
+  expect((await post('/api/auth/passkeys/rename', { id: 'cred-2', name: 'x'.repeat(80) })).json().then(b => b.name.length)).resolves.toBe(60)
+
+  expect((await post('/api/auth/passkeys/remove', { id: 'cred-2' })).status).toBe(200)
+  expect(names()).toEqual(['cred-1:null'])
+  const last = await post('/api/auth/passkeys/remove', { id: 'cred-1' })
+  expect(last.status).toBe(409)
+  expect((await last.json()).code).toBe('last_passkey')
+  expect(names()).toEqual(['cred-1:null'])
+})

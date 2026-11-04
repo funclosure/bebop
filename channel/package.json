@@ -1,7 +1,7 @@
 {
   "name": "bebop-channel",
-  "version": "0.0.1",
   "description": "Claude Code channel for Bebop.",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "license": "MIT",

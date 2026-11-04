@@ -2,6 +2,7 @@
 // The provider is the only part that knows the multiplexer (herdr: https://herdr.dev);
 // the watcher and the HTTP side only see the generic Pane shape below.
 import { basename } from 'path'
+import type { ShellBackend, ShellProbe, Shareable } from './shells'
 
 export type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 export type Pane = { id: string; title: string; agent: string; status: PaneStatus; cwd: string | null; project: string | null; focused: boolean }
@@ -15,6 +16,8 @@ export interface PaneProvider {
   prompt(id: string, text: string): Promise<void>
   /** Literal text typed into the pane, no Enter; works while a dialog is up (its text field). */
   text(id: string, text: string): Promise<void>
+  /** The agent's process id, when the multiplexer knows it (finds its transcript). */
+  agentPid?(id: string): Promise<number | null>
 }
 
 /** A refusal or failure from the provider. `code` is passed to the client (e.g. agent_blocked). */
@@ -86,7 +89,7 @@ export const spawnRunner: Runner = async (argv, env, timeoutMs) => {
   } finally { clearTimeout(t) }
 }
 
-export function herdrProvider(o: { bin: string; socket?: string; timeoutMs?: number; run?: Runner }): PaneProvider {
+export function herdrProvider(o: { bin: string; socket?: string; timeoutMs?: number; run?: Runner; shells?: () => Set<string> }): PaneProvider {
   const run = o.run ?? spawnRunner
   const env: Record<string, string> = o.socket ? { HERDR_SOCKET_PATH: o.socket } : {}
   const timeout = o.timeoutMs ?? 5000
@@ -104,22 +107,42 @@ export function herdrProvider(o: { bin: string; socket?: string; timeoutMs?: num
     return parsed
   }
 
+  const isShell = (id: string) => !!o.shells?.().has(id)
   return {
-    async list() { return parseHerdrList(await call(['agent', 'list'])) },
+    async list() {
+      const agents = parseHerdrList(await call(['agent', 'list']))
+      const shells = o.shells?.() ?? new Set<string>()
+      if (!shells.size) return agents
+      // The hub's own shells (opened or shared, hub/shells.ts): plain panes, so not in the agent list.
+      const have = new Set(agents.map(a => a.id))
+      const panes = ((await call(['pane', 'list']).catch(() => null))?.result?.panes ?? []).filter((p: any) => shells.has(p?.pane_id) && !have.has(p.pane_id))
+      const extra = await Promise.all(panes.map(async (p: any): Promise<Pane> => {
+        const pi = (await call(['pane', 'process-info', '--pane', p.pane_id]).catch(() => null))?.result?.process_info
+        const fg = pi?.foreground_processes?.[0]?.pid
+        const cwd = p.foreground_cwd || p.cwd || null
+        return { id: p.pane_id, title: cwd ? basename(cwd) : p.pane_id, agent: 'shell', status: pi ? (fg == null || fg === pi.shell_pid ? 'idle' : 'working') : 'unknown', cwd, project: cwd ? basename(cwd) : null, focused: !!p.focused }
+      }))
+      return [...agents, ...extra]
+    },
     // `recent` = the visible screen plus the scrollback above it, so a tall phone screen fills up.
     async screen(id, lines, opts) {
       const ansi = !!opts?.ansi
-      const read = (source: string) => call(['agent', 'read', id, '--source', source, '--lines', String(lines), '--format', ansi ? 'ansi' : 'text'], false)
+      const read = (source: string) => call([isShell(id) ? 'pane' : 'agent', 'read', id, '--source', source, '--lines', String(lines), '--format', ansi ? 'ansi' : 'text'], false)
       // While a dialog is up in an alternate-screen session (newer Claude Code), herdr can't
       // scroll for the history and refuses; the visible screen still holds the dialog.
       const out = await read('recent').catch(e => { if (e instanceof PaneError && e.code === 'agent_not_idle') return read('visible'); throw e })
       return tidyScreen(out, lines, ansi)
     },
-    async keys(id, keys) { await call(['agent', 'send-keys', id, ...keys]) },
+    // `pane send-*` print nothing on success (the agent commands print JSON).
+    async keys(id, keys) { await (isShell(id) ? call(['pane', 'send-keys', id, ...keys], false) : call(['agent', 'send-keys', id, ...keys])) },
     // The text is the first positional after the target, so a leading '-' is not read as an option.
-    async prompt(id, text) { await call(['agent', 'prompt', id, text]) },
+    // A shell has no agent to prompt: the line is typed, then Enter.
+    async prompt(id, text) {
+      if (isShell(id)) { await call(['pane', 'send-text', id, text], false); await call(['pane', 'send-keys', id, 'enter'], false); return }
+      await call(['agent', 'prompt', id, text])
+    },
     // `pane send-text` types it as is (no Enter, no blocked check); a leading '-' is text here too.
-    async text(id, text) { await call(['pane', 'send-text', id, text]) },
+    async text(id, text) { await call(['pane', 'send-text', id, text], false) },
   }
 }
 
@@ -160,7 +183,22 @@ export function rexAgent(process: any): string | null {
 /** Rex's `--format vt` moves the cursor right (`ESC [ n C`) in place of runs of spaces. */
 export const rexVtSpaces = (s: string) => s.replace(/\x1b\[(\d*)C/g, (_, n) => ' '.repeat(Math.min(Number(n || 1), 1000)))
 
-export function rexProvider(o: { bin: string; timeoutMs?: number; run?: Runner }): PaneProvider {
+/** A Rex pane that is one of the hub's own shells (hub/shells.ts): idle at its prompt, working while a command runs. */
+function rexShellPane(id: string, session: { label?: string }, proc: any): Pane {
+  const cwd = typeof proc?.foreground?.cwd === 'string' && proc.foreground.cwd ? proc.foreground.cwd : null
+  const childPid = proc?.child?.pid, fgPid = proc?.foreground?.pid
+  return {
+    id,
+    title: (cwd ? basename(cwd) : '') || String(session.label ?? '').replace(/^bebop-shell-/, '') || 'terminal',
+    agent: 'shell',
+    status: childPid != null && fgPid === childPid ? 'idle' : proc?.foreground ? 'working' : 'unknown',
+    cwd,
+    project: cwd ? basename(cwd) : null,
+    focused: false,
+  }
+}
+
+export function rexProvider(o: { bin: string; timeoutMs?: number; run?: Runner; shells?: () => Set<string> }): PaneProvider {
   const run = o.run ?? spawnRunner
   const timeout = o.timeoutMs ?? 5000
 
@@ -186,7 +224,11 @@ export function rexProvider(o: { bin: string; timeoutMs?: number; run?: Runner }
     const b = ['block', 'call', '-b', block.block_id]
     const proc = await call([...b, 'process'])
     const agent = rexAgent(proc)
-    if (!agent) return null
+    if (!agent) {
+      // A plain shell shows only if the hub opened it; every other one stays hidden.
+      const id = rexPaneId(session.session_id, block.block_id)
+      return o.shells?.().has(id) ? rexShellPane(id, session, proc) : null
+    }
     const [status, title] = await Promise.all([call([...b, 'program_status']), call([...b, 'title']).catch(() => null)])
     const cwd = typeof proc?.foreground?.cwd === 'string' && proc.foreground.cwd ? proc.foreground.cwd : null
     const t = String(title?.title ?? '').replace(TITLE_GLYPH, '').trim()
@@ -233,6 +275,136 @@ export function rexProvider(o: { bin: string; timeoutMs?: number; run?: Runner }
       await call(['send-key', '-b', t.block, 'enter'], false)
     },
     text: paste,
+    async agentPid(id) {
+      const pid = (await call(['block', 'call', '-b', target(id).block, 'process']))?.foreground?.pid
+      return Number.isInteger(pid) && pid > 0 ? pid : null
+    },
+  }
+}
+
+/** Shells in Rex (hub/shells.ts): a new one is a Rex session running a login zsh started
+ *  directly (no Rex shell around it) through `env -i`, so only the given environment reaches it. */
+export function rexShellBackend(o: { bin: string; timeoutMs?: number; run?: Runner }): ShellBackend {
+  const run = o.run ?? spawnRunner
+  const timeout = o.timeoutMs ?? 10000
+  async function call(args: string[]): Promise<string> {
+    const r = await run([o.bin, ...args], {}, timeout)
+    if (r.code !== 0) throw new PaneError(/not.?found|no such|unknown block/i.test(r.stderr) ? 'agent_not_found' : 'failed', (r.stderr || r.stdout).trim().replace(/^Error:\s*/, '').split('\n')[0].slice(0, 300) || `exit ${r.code}`)
+    return r.stdout
+  }
+  const processOf = async (id: string) => {
+    const t = parseRexPaneId(id)
+    if (!t) throw new PaneError('agent_not_found', `not a Rex pane: ${id}`)
+    return JSON.parse(await call(['block', 'call', '-s', t.session, '-b', t.block, 'process']))
+  }
+  return {
+    name: 'rex',
+    owns: id => REX_ID.test(id),
+    async open({ label, cwd, env }) {
+      const vars = Object.entries(env).map(([k, v]) => `${k}=${v}`)
+      const out = JSON.parse(await call(['new', label, '--cwd', cwd, '--json', '--shell', 'none', '--', '/usr/bin/env', '-i', ...vars, '/bin/zsh', '-l']))
+      const block = out?.initial_windows?.[0]?.block_ids?.[0]
+      if (typeof out?.session_id !== 'string' || typeof block !== 'string') throw new PaneError('bad_output', 'rex new did not name its session')
+      const id = rexPaneId(out.session_id, block)
+      let pid: unknown = null
+      for (let i = 0; i < 20 && !Number.isInteger(pid); i++) {
+        pid = (await processOf(id).catch(() => null))?.child?.pid
+        if (!Number.isInteger(pid)) await Bun.sleep(100)
+      }
+      if (!Number.isInteger(pid)) { await call(['kill', out.session_id]).catch(() => {}); throw new PaneError('failed', 'the shell did not start') }
+      return { id, pid: pid as number }
+    },
+    async probe(id) {
+      const p = await processOf(id).catch(e => { if (e instanceof PaneError && e.code === 'agent_not_found') return null; throw e })
+      return Number.isInteger(p?.child?.pid) ? { pid: p.child.pid, agent: rexAgent(p) != null } : null
+    },
+    async close(id) {
+      const t = parseRexPaneId(id)
+      if (t) await call(['kill', t.session])
+    },
+    async shareable() {
+      const sessions = JSON.parse(await call(['api', 'call', 'session.list']))?.sessions ?? []
+      const out: Shareable[] = []
+      for (const sess of sessions) {
+        const blocks = JSON.parse(await call(['api', 'call', 'session.list_blocks', JSON.stringify({ session_id: sess.session_id })]).catch(() => '{}'))?.blocks ?? []
+        for (const b of blocks) {
+          if (b?.creator_name !== 'com.superlogical.terminal') continue
+          const id = rexPaneId(sess.session_id, b.block_id)
+          const p = await processOf(id).catch(() => null)
+          if (!p || rexAgent(p) || !Number.isInteger(p.child?.pid)) continue
+          out.push({ id, cwd: p.foreground?.cwd ?? p.child?.cwd ?? null, title: String(sess.label ?? 'shell'), pid: p.child.pid })
+        }
+      }
+      return out
+    },
+  }
+}
+
+const AGENT_NAMES = /^(claude|codex|gemini|opencode|pi|aider|amp|cursor-agent)$/
+/** A herdr pane's process info → its shell pid, and whether an agent runs in front of it. */
+export function herdrProbe(info: any): ShellProbe | null {
+  const pi = info?.result?.process_info
+  if (!Number.isInteger(pi?.shell_pid)) return null
+  const fg = Array.isArray(pi.foreground_processes) ? pi.foreground_processes : []
+  const agent = fg.some((f: any) => [f?.argv0, f?.name, Array.isArray(f?.argv) ? basename(String(f.argv[0] ?? '')) : ''].some(n => AGENT_NAMES.test(String(n ?? ''))))
+  return { pid: pi.shell_pid, agent }
+}
+
+/** A word typed into a shell, quoted so it stays one word. */
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+
+/** Shells in herdr: a new one is a tab (no focus) whose shell then execs a login zsh through
+ *  `env -i`; the pid stays the same, so it is recorded before. */
+export function herdrShellBackend(o: { bin: string; socket?: string; timeoutMs?: number; run?: Runner }): ShellBackend {
+  const run = o.run ?? spawnRunner
+  const env: Record<string, string> = o.socket ? { HERDR_SOCKET_PATH: o.socket } : {}
+  const timeout = o.timeoutMs ?? 10000
+  async function call(args: string[]): Promise<any> {
+    const r = await run([o.bin, ...args], env, timeout)
+    let parsed: any = null
+    try { parsed = JSON.parse(r.stdout) } catch {}
+    if (parsed?.error) throw new PaneError(/not_found/.test(String(parsed.error.code)) ? 'agent_not_found' : String(parsed.error.code ?? 'error'), String(parsed.error.message ?? 'herdr error'))
+    if (r.code !== 0) throw new PaneError('failed', (r.stderr || r.stdout).trim().slice(0, 300) || `exit ${r.code}`)
+    return parsed
+  }
+  const probe = async (id: string) => {
+    try { return herdrProbe(await call(['pane', 'process-info', '--pane', id])) } catch (e) {
+      if (e instanceof PaneError && e.code === 'agent_not_found') return null
+      throw e
+    }
+  }
+  return {
+    name: 'herdr',
+    owns: id => /^w[\w-]*:p[\w-]+$/.test(id),
+    async open({ label, cwd, env: vars }) {
+      const out = await call(['tab', 'create', '--cwd', cwd, '--label', label, '--no-focus'])
+      const id = out?.result?.root_pane?.pane_id, tab = out?.result?.tab?.tab_id ?? out?.result?.root_pane?.tab_id
+      if (typeof id !== 'string') throw new PaneError('bad_output', 'herdr tab create did not name its pane')
+      let p: ShellProbe | null = null
+      for (let i = 0; i < 20 && !p; i++) { p = await probe(id).catch(() => null); if (!p) await Bun.sleep(100) }
+      if (!p) { if (tab) await call(['tab', 'close', tab]).catch(() => {}); throw new PaneError('failed', 'the shell did not start') }
+      // exec keeps the pid: the same process becomes a login zsh with only these variables.
+      const line = ['exec', '/usr/bin/env', '-i', ...Object.entries(vars).map(([k, v]) => shq(`${k}=${v}`)), '/bin/zsh', '-l'].join(' ')
+      await call(['pane', 'run', id, line])
+      return { id, pid: p.pid }
+    },
+    probe,
+    async close(id) {
+      const tab = (await call(['pane', 'get', id]).catch(() => null))?.result?.pane?.tab_id
+      if (tab) await call(['tab', 'close', tab]); else await call(['pane', 'close', id])
+    },
+    async shareable() {
+      const [panes, agents] = await Promise.all([call(['pane', 'list']), call(['agent', 'list']).catch(() => null)])
+      const agentIds = new Set((agents?.result?.agents ?? []).map((a: any) => a?.pane_id))
+      const out: Shareable[] = []
+      for (const p of panes?.result?.panes ?? []) {
+        if (typeof p?.pane_id !== 'string' || agentIds.has(p.pane_id)) continue
+        const pr = await probe(p.pane_id).catch(() => null)
+        if (!pr || pr.agent) continue
+        out.push({ id: p.pane_id, cwd: p.foreground_cwd || p.cwd || null, title: String(p.terminal_title_stripped || p.pane_id), pid: pr.pid })
+      }
+      return out
+    },
   }
 }
 
@@ -263,6 +435,7 @@ export function combinedProvider(providers: PaneProvider[]): PaneProvider {
     async keys(id, keys) { return (await find(id)).keys(id, keys) },
     async prompt(id, text) { return (await find(id)).prompt(id, text) },
     async text(id, text) { return (await find(id)).text(id, text) },
+    async agentPid(id) { const p = await find(id); return p.agentPid ? p.agentPid(id) : null },
   }
   return combined
 }

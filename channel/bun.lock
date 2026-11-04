@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "bebop-channel",
+      "name": "companion-hub-channel",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.32.1",
       },

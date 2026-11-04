@@ -5,7 +5,8 @@ import { createHub } from '../hub/server'
 
 export function startHub(extra: Partial<Parameters<typeof createHub>[0]> = {}) {
   const dataDir = mkdtempSync(join(tmpdir(), 'hub-test-'))
-  const hub = createHub({ dataDir, port: 0, log: () => {}, ...extra })
+  // Icon lookups stay inside the test's own folder, never the real home folder.
+  const hub = createHub({ dataDir, port: 0, log: () => {}, iconRoots: [dataDir], ...extra })
   const agent = (path: string, init: RequestInit = {}) =>
     fetch(hub.url + path, { ...init, headers: { authorization: `Bearer ${hub.token}`, 'content-type': 'application/json', ...(init.headers ?? {}) } })
   const user = (path: string, init: RequestInit = {}) =>

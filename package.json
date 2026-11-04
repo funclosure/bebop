@@ -1,13 +1,14 @@
 {
   "name": "bebop",
-  "version": "0.0.1",
   "description": "Bebop: a phone-first client and message system for your own Claude Code session.",
+  "author": "funclosure",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "author": "funclosure",
   "scripts": {
     "hub": "bun hub/main.ts",
+    "tools": "bun scripts/tools.ts",
     "test": "bun test",
     "postinstall": "bun scripts/vendor.ts"
   },

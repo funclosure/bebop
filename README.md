@@ -8,7 +8,7 @@ What you get, compared with talking to a session over a chat bot:
 - **History and threads**, searchable, with original-quality photos, videos and files.
 - **Cards instead of text menus**: questions with options, approvals, live progress, background tasks.
 - **Voice notes**, transcribed by your own command (e.g. whisper.cpp), and dictation that tidies a rambling monologue into a prompt before you send it.
-- **Peers and sessions**: relay to other Claude Code sessions on the machine, and (with [herdr](https://herdr.dev)) see their screens and answer their prompts from your phone.
+- **Peers and sessions**: relay to other Claude Code sessions on the machine (plain Claude Code messaging, nothing else to install), and, if they run in [herdr](https://herdr.dev) or [Rex](https://superlogical.com/rex), see their screens and answer their prompts from your phone.
 - **Engine-agnostic.** The hub knows nothing about any one agent; a thin adapter connects an engine. The first adapter is a Claude Code channel.
 
 ```
@@ -19,8 +19,8 @@ PWA (phone, browser) ──HTTPS via tailscale serve──▶ hub (Bun, SQLite) 
 - `hub/`: Bun HTTP server (`Bun.serve`, `bun:sqlite`). Binds 127.0.0.1 only.
 - `web/`: the PWA. Plain ES modules and CSS, no build step. `bun install` copies `marked` and `dompurify` into `web/vendor/`.
 - `channel/`: a Claude Code channel (MCP stdio server), packaged as a plugin, plus `watch.ts`, a watcher that receives without the channel flag.
-- `examples/companion/`: a durable, always-on companion built on the hub (identity in files, journal, task ledger, crash relaunch, idle restart). Optional.
 - `examples/refine.sh`: a dictation refiner on `claude -p` (see Dictation). Optional.
+- `examples/companion/`: a durable, always-on companion built on the hub (identity in files, journal, task ledger, crash relaunch, idle restart). Optional.
 - `data/` (gitignored): `hub.sqlite`, `files/`, `vapid.json`, `agent.token`.
 
 ## Requirements
@@ -28,13 +28,13 @@ PWA (phone, browser) ──HTTPS via tailscale serve──▶ hub (Bun, SQLite) 
 - [Bun](https://bun.sh) (tested on 1.4)
 - [Tailscale](https://tailscale.com) on the machine and your phone (for HTTPS, login and reaching the hub from anywhere)
 - [Claude Code](https://claude.com/claude-code) for the adapter
-- Optional: a speech-to-text command for voice notes, [herdr](https://herdr.dev) for the Sessions view
+- Optional: a speech-to-text command for voice notes; [herdr](https://herdr.dev) or [Rex](https://superlogical.com/rex) for the Sessions view only. Relaying to other sessions needs neither: it goes through Claude Code's own messaging, and any session shows up as a peer.
 
 ## Security model
 
 - The hub listens on `127.0.0.1` only. `tailscale serve` is the one way in from outside, and it adds the caller's Tailscale login to each request. `HUB_ALLOWED_LOGINS` lists the logins that may use the app; set it before you expose the hub.
 - The agent side (`/agent/*`) needs the bearer token in `data/agent.token` and is refused for anything that came through `tailscale serve`, so only processes on the machine can act as the agent.
-- The Sessions view never runs a shell: it calls the herdr CLI with an argument list, accepts only a short list of keys, and logs every action. But it does type into your terminal sessions: **anyone who can open and unlock the app can send keys and prompts to them**, so the app is as powerful as your shell. Keep `HUB_ALLOWED_LOGINS` tight and turn on the passkey lock (below) if you use Sessions.
+- The Sessions view never runs a shell: it calls the herdr or Rex CLI with an argument list, accepts only a short list of keys, and logs every action. But it does type into your terminal sessions: **anyone who can open and unlock the app can send keys and prompts to them**, so the app is as powerful as your shell. Keep `HUB_ALLOWED_LOGINS` tight and turn on the passkey lock (below) if you use Sessions.
 - Never expose the hub with `tailscale funnel`. Funnel traffic arrives from localhost without a login header, so in dev mode (no `HUB_ALLOWED_LOGINS`) it would be let in as you.
 - The login is a header that `tailscale serve` adds. A process on the machine itself could send the same header, so the hub trusts the machine it runs on.
 - Messages, files and the token stay in `data/` on your machine.
@@ -64,6 +64,7 @@ tailscale serve --bg 8787
 The app can also be locked with a passkey (Face ID, Touch ID or the platform's own), on top of the Tailscale login.
 
 - **Turning it on.** The lock is off until the first passkey is registered: in the app, Settings → Security → Face ID lock (Touch ID / Passkey on other devices) → Turn on. Once unlocked, "Another device" adds a passkey for a second phone or computer. There is no off switch in the app on purpose; turning it off is done on the hub machine (below).
+- **Managing passkeys.** Settings lists them, with "This device" on the one this browser unlocks with. Tap one to rename it (Save appears once the name changed) or remove it (the trash icon, which asks first). Both ask for the passkey again. The last passkey can't be removed in the app. A removed passkey stays in the device's password manager until you delete it there, and a device already unlocked with it stays unlocked until it locks.
 - **What it guards.** With at least one passkey, every `/api/*` route (except `/api/auth/*`) and `/files/*` needs an unlocked session. The agent side (`/agent/*`) is not affected.
 - **Idle lock.** The app locks again after 5 minutes away (no requests and no open event stream). "Lock now" locks it at once.
 - **Approvals.** Answering an approval card asks for the passkey again (step-up), even while unlocked.
@@ -136,16 +137,17 @@ The magnifier in the top bar searches every message (text, voice transcripts, ca
 
 ### Sessions (terminal panes)
 
-If your agent sessions run in [herdr](https://herdr.dev), the app can show them and answer them. Set `HUB_HERDR_BIN` (and `HUB_HERDR_SOCKET` if herdr's socket is not at its default path): a terminal button appears in the top bar, with a dot while a session is waiting for you. Without `HUB_HERDR_BIN` this is all off.
+If your agent sessions run in [herdr](https://herdr.dev) or [Rex](https://superlogical.com/rex), the app can show them and answer them. This is the only part that needs either; relays work without them. For herdr, set `HUB_HERDR_BIN` (and `HUB_HERDR_SOCKET` if herdr's socket is not at its default path). Rex is used when its CLI is installed (or at `HUB_REX_BIN`; `HUB_REX_BIN=off` turns it off). A terminal button then appears in the top bar, with a dot while a session is waiting for you. With neither, this is all off.
 
 - **List and screen.** The list shows the sessions, waiting first. One session's screen refreshes every 1.5 s with the pane's colors, reflowed to fit the phone: lines wrapped at the desk width are rejoined and wrapped at the phone's width, rules span the width, tables scroll sideways. The real pane is never resized.
 - **Switching.** A fleet strip ("2 working · 9 idle") opens a session picker, and a sideways swipe on the header or the strip steps to the next session.
 - **Dialogs as cards.** A question (AskUserQuestion), a permission prompt or a short menu without numbers (the folder-trust prompt) appears under the screen as a card: one row per option with its description and a Recommended tag. A tap sends that option's digit (arrows and Enter for a menu without numbers), "Type something" types into the prompt, and Cancel sends Esc. In a multi-select a tap toggles a row and Next moves on.
 - **Prompt and keys.** A line below sends a prompt (refused while a dialog is up). A key bar (`Esc` `⇥` `⇧⇥`, `1`–`5`, arrows, `⏎`) handles anything else, and comes up by itself for a dialog the app can't read as a card (`/model`, `/resume`).
+- **Earlier turns.** A Claude Code session draws on the alternate screen, so its pane only ever holds one screen. Load earlier, above it, reads the session's own transcript (`~/.claude/projects/<folder>/<session id>.jsonl`, found through `~/.claude/sessions/<pid>.json`; `CLAUDE_CONFIG_DIR` moves it) a page at a time going back: prompts, replies, messages from other sessions, and each tool call as one line (runs of more than three fold into one row).
 - **Push.** When a session starts waiting, the hub sends a push (at most one per session per 2 minutes) that opens its screen.
-- **Safety.** Only a short list of keys is accepted, every key press and prompt is logged in the `pane_actions` table, and the hub never runs a shell: it calls the herdr CLI with an argument list. See the security note above: whoever unlocks the app can type into these sessions.
+- **Safety.** Only a short list of keys is accepted, every key press and prompt is logged in the `pane_actions` table, and the hub never runs a shell: it calls the herdr or Rex CLI with an argument list. See the security note above: whoever unlocks the app can type into these sessions.
 
-Optional: sessions in [Rex](https://superlogical.com/rex) can show up next to herdr's. The hub uses Rex's CLI when it finds it installed (or at `HUB_REX_BIN`; `HUB_REX_BIN=off` turns it off).
+**Shells (off by default).** With `HUB_SHELLS=on` (or `rex` / `herdr` to pick where new ones open; `on` = Rex if there is one, else herdr), a Claude session's screen gets *Open terminal*: a new shell in that session's folder (it must be inside the allowed folders: `HUB_ICON_ROOTS`, default your home folder). Optionally (`"share": true` in `shells.json`), Sessions also gets *Share a terminal*: it lists the plain terminals already open on the machine (no agent running, never a pane the hub has seen running an agent or one named after an agent, in an allowed folder), in Rex and herdr, and shows the one you tap. Only these are ever shown; every other plain shell stays hidden. Opening, listing and sharing need the passkey lock on and a fresh Face ID; typing needs Face ID again after 5 minutes without a command or after the app was in the background. A command goes one line at a time, and a risky one (deleting, `sudo`, `git push`, `curl | sh`, `kill`, redirecting into a file…) comes back as a confirm card first: a speed bump, not a sandbox. The key bar gets ^C. An opened shell is a login zsh started through `env -i` with a short environment (no `HUB_*` settings; your `~/.zshenv` still runs); it ends when you leave it in the app, after 10 minutes idle, and when the hub restarts. A shared terminal is yours: the same events only stop sharing it, and it keeps running. A pane stops being a shell as soon as its shell process changes or an agent starts in it. At most one opened shell per project and two shells in all. Every open, share, command, key, close and unshare is kept in `pane_actions`. Optional `data/shells.json` (`HUB_SHELLS_FILE`): `{"deny": ["<folder name>"], "share": true}` takes a folder out, or turns sharing on (`projects` sets a project's folder for `POST /api/shells {project}`).
 
 ### Voice notes
 
@@ -202,14 +204,20 @@ The script reads `HUB_URL` and `HUB_TOKEN_FILE` (by default `data/agent.token` i
 | `HUB_HERDR_BIN` | (unset: sessions off) | path to the `herdr` binary; turns on the Sessions view |
 | `HUB_HERDR_SOCKET` | (herdr's default) | passed to herdr as `HERDR_SOCKET_PATH` |
 | `HUB_REX_BIN` | (Rex's CLI, if installed) | optional: path to the [Rex](https://superlogical.com/rex) CLI, whose Claude Code sessions join the Sessions view; `off` disables |
-| `HUB_ICON_ROOTS` | (home folder) | colon-separated folders a peer's project `path` must be inside for its icon to be shown |
+| `HUB_ICON_ROOTS` | (home folder) | colon-separated folders a peer's project `path` must be inside for its icon to be shown; terminals open only inside them too |
+| `HUB_SHELLS` | (off) | `on`, `rex` or `herdr`: shells on demand and shared terminals (see Shells); optional overrides in `HUB_SHELLS_FILE` (default `<data dir>/shells.json`) |
+| `HUB_TOOLS_FILE` | `<data dir>/tools.json` | the tools to load (see Tools); `bun run tools` uses it too, and keeps `tools.lock.json` and git clones (`tools/<id>/`) beside it |
+| `HUB_PUBLIC_ORIGIN` | (unset) | the app's origin(s) from outside, e.g. `https://<machine>.<tailnet>.ts.net`: given to `run: true` tools as `BEBOP_HUB_ORIGIN`, and refused as a tool origin |
+| `HUB_AGENT_ID` | the agent name in lowercase | the agent's id, given to tools (Board's answerer) |
+| `HUB_BOARD_ORIGIN` | (unset) | deprecated: loads Board (board-host v1) at this origin as a built-in tool; list it in tools.json instead |
+| `HUB_USER_NAME` | `You` | the user's name, given to tools for their posts |
 | `HUB_URL`, `HUB_TOKEN_FILE` | see above | read by the channel adapter |
 
 ## HTTP API (short)
 
-User side (Tailscale login): `GET /api/messages?thread=&before=&after=&around=&date=&tz=&limit=`, `GET /api/search?q=&thread=&before=&limit=`, `POST /api/threads/:id/archive|unarchive`, `POST /api/messages` (`text` / `voice` / `answer` / `reaction`, optional `client_id` for idempotent retries), `POST /api/upload` (multipart, streamed to disk), `GET /files/:id` (Range), `GET /api/threads`, `GET /api/commands`, `GET /api/peers`, `GET /api/presence`, `GET /api/tasks`, `POST /api/read`, `GET /api/events` (SSE: `message`, `update`, `reaction`, `threads`, `commands`, `peers`, `presence`, `tasks`), `GET /api/push/key`, `POST /api/push/subscribe|unsubscribe`. With sessions on: `GET /api/panes`, `GET /api/panes/:id/screen?lines=&ansi=1`, `POST /api/panes/:id/keys {keys}`, `POST /api/panes/:id/prompt {text}`, `POST /api/panes/:id/text {text}` (typed as is, even under a dialog; the POSTs need `X-Hub-Action: 1` and a JSON body), SSE `panes`.
+User side (Tailscale login): `GET /api/messages?thread=&before=&after=&around=&date=&tz=&limit=`, `GET /api/search?q=&thread=&before=&limit=`, `POST /api/threads/:id/archive|unarchive`, `POST /api/threads/:id/tools/:tool` (needs `X-Hub-Action: 1`; `{tool, instance, origin, frame, link, scope, page}`; `/board` is an alias for one release), `POST /api/projects/:key/tools/:tool` (a project tool's overview; `X-Hub-Action: 1`, optional `{name}`; adds `project`), `GET /api/tools/:id/icon`, `GET /api/config` (`tools`, `agent_id`, …), `POST /api/messages` (`text` / `voice` / `answer` / `reaction`, optional `client_id` for idempotent retries), `POST /api/upload` (multipart, streamed to disk), `GET /files/:id` (Range), `GET /api/threads`, `GET /api/commands`, `GET /api/peers`, `GET /api/presence`, `GET /api/tasks`, `POST /api/read`, `GET /api/events` (SSE: `message`, `update`, `reaction`, `threads`, `commands`, `peers`, `presence`, `tasks`), `GET /api/push/key`, `POST /api/push/subscribe|unsubscribe`. With sessions on: `GET /api/panes`, `GET /api/panes/:id/screen?lines=&ansi=1`, `POST /api/panes/:id/keys {keys}`, `POST /api/panes/:id/prompt {text}`, `GET /api/panes/:id/history?before=&session=&limit=` (earlier turns from the transcript), `POST /api/shells {pane}` (or `{project}`), `POST /api/shells/shareable`, `POST /api/shells/share {id}`, `POST /api/shells/:id/close|disarm` (shells on), `POST /api/panes/:id/text {text}` (typed as is, even under a dialog; the POSTs need `X-Hub-Action: 1` and a JSON body), SSE `panes`.
 
-Agent side (`Authorization: Bearer <data/agent.token>`; refused if the request came through `tailscale serve`): `GET /agent/stream` (SSE of un-acked user messages), `POST /agent/ack`, `POST /agent/send`, `POST /agent/update`, `POST /agent/react`, `POST /agent/threads`, `POST /agent/threads/:id`, `POST /agent/commands`, `POST /agent/peers`, `POST /agent/presence`, `POST /agent/tasks`, `GET /agent/history`, `GET /agent/file/:id`.
+Agent side (`Authorization: Bearer <data/agent.token>`; refused if the request came through `tailscale serve`): `GET /agent/stream` (SSE of un-acked user messages), `POST /agent/ack`, `POST /agent/send`, `POST /agent/update`, `POST /agent/react`, `POST /agent/threads`, `POST /agent/threads/:id`, `POST /agent/commands`, `POST /agent/peers`, `POST /agent/presence`, `POST /agent/tasks`, `GET /agent/history`, `GET /agent/file/:id`, `GET /agent/tools` (each tool's id, name, origin, scope, ref keys, CLI path and instructions).
 
 ## License
 

@@ -5,6 +5,7 @@ import DOMPurify from './vendor/purify.js'
 import { S } from './strings.js'
 import { parseAnsi, layoutScreen, spanCss, fleetCounts, findLinks, projectThread, newProjectThread, projectOfThread, validPeer, addressed, unaddressed } from './term.js'
 import { parseDialog, keysFor, cardable } from './dialog.js'
+import { postLimiter } from './limits.js'
 
 const $ = id => document.getElementById(id)
 const h = (tag, attrs = {}, ...kids) => {
@@ -82,6 +83,7 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', ...(opts.headers ?? {}) } })
   if (!res.ok) {
     const e = new Error(`HTTP ${res.status}`); e.status = res.status
+    e.body = await res.clone().json().catch(() => null)
     if (res.status === 401 && !path.startsWith('api/auth/')) showLock()
     throw e
   }
@@ -962,10 +964,18 @@ function agentRow(name, current, unread) {
     n ? h('button', { type: 'button', class: `agent-tasks${state.tasks.some(x => x.state === 'running') ? ' running' : ''}`, title: S.tasksLabel(n.active, n.running), 'aria-label': S.tasksLabel(n.active, n.running), 'aria-haspopup': 'dialog', onclick: openTasks }, String(n.active)) : null)
 }
 const ICON_TERMINAL = '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
+// An agent session's mark: a neutral sparkle (not any vendor's logo, so Bebop ships it);
+// one per agent later (codex, pi…). >_ is kept for plain terminals.
+const ICON_AGENT = '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M11 3.5c.7 4.6 2.9 6.8 7.5 7.5-4.6.7-6.8 2.9-7.5 7.5-.7-4.6-2.9-6.8-7.5-7.5 4.6-.7 6.8-2.9 7.5-7.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" fill="none"/><path d="M18.5 3v3.5M16.75 4.75h3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>'
+const AGENT_MARKS = {} // e.g. { codex: '<svg…>' }
+// On a terminal, the >_ slot closes it: the same frame with an × for the prompt.
+const ICON_TERMINAL_CLOSE = '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m9.5 9.5 5 5m0-5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>'
+const agentMark = agent => agent === 'shell' ? ICON_TERMINAL : AGENT_MARKS[agent] ?? ICON_AGENT
+const markEl = (agent, cls = 'agent-mark') => h('span', { class: cls, title: agent === 'shell' ? S.terminal : agent, html: agentMark(agent) })
 function sessionsRow() {
   const cur = state.home?.kind === 'sessions', n = panes.list.filter(p => p.status === 'working').length
   return h('button', { type: 'button', class: `proj${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => openHome({ kind: 'sessions' }) },
-    h('span', { class: 'proj-icon proj-slot', html: ICON_TERMINAL }), h('span', { class: 'proj-name' }, S.sessions), n ? h('span', { class: 'proj-n' }, String(n)) : null,
+    h('span', { class: 'proj-icon proj-slot', html: ICON_AGENT }), h('span', { class: 'proj-name' }, S.sessions), n ? h('span', { class: 'proj-n' }, String(n)) : null,
     dotEl(worstDot(panes.list.map(p => stateClass(p.status)))))
 }
 const byPaneDot = (a, b) => DOT_RANK[stateClass(a.status)] - DOT_RANK[stateClass(b.status)]
@@ -999,18 +1009,19 @@ function renderSide() {
 function shortTitle(title, p) {
   if (!p) return title
   const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const rest = title.replace(new RegExp(`^(${esc(p.name)}|${esc(p.key)})(: *| +)`, 'i'), '')
+  const rest = title.replace(new RegExp(`^(${esc(p.name)}|${esc(p.key)})(: *| · | +)`, 'i'), '')
   return rest ? rest[0].toUpperCase() + rest.slice(1) : title
 }
 function sessionCard(x, go, column) {
   const dot = dotEl(stateClass(x.state)), can = x.pane != null && panes.on
-  const main = h('div', { class: `sess-main${isOffline(x.state) ? ' offline' : ''}` }, h('div', {}, S.sessionLine(x.state)), x.detail ? h('small', {}, x.detail) : null)
+  const agent = x.pane != null ? panes.list.find(p => p.id === x.pane)?.agent : null
+  const main = h('div', { class: `sess-main${isOffline(x.state) ? ' offline' : ''}` }, h('div', { class: 'sess-line' }, agent ? markEl(agent) : null, S.sessionLine(x.state)), x.detail ? h('small', {}, x.detail) : null)
   // Beside the conversation a session is selected like a topic; in the sheet it opens full screen.
   if (column && can) {
     const cur = panes.open && panes.id === x.pane
     return h('button', { type: 'button', class: `sess sess-row${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => go(x.pane) }, dot, main)
   }
-  return h('div', { class: 'sess' }, dot, main, can && !column ? h('button', { type: 'button', class: 'sess-term', onclick: () => go(x.pane) }, S.terminal) : null)
+  return h('div', { class: 'sess' }, dot, main, can && !column ? h('button', { type: 'button', class: 'sess-term', onclick: () => go(x.pane) }, S.openSession) : null)
 }
 function topicItem(t, p, pick, column) {
   const cur = column && t.id === state.thread && !panes.open
@@ -1033,14 +1044,15 @@ const viewTopics = view => view.kind === 'sessions' ? [] : view.kind === 'needs'
 function homeNodes(view, pick, term, column = false) {
   if (view.kind === 'sessions') {
     const all = [...panes.list].sort(byPaneDot)
-    return [h('div', { class: 'home-head' }, h('h2', {}, S.sessions)), ...all.map(sessionItem), all.length ? null : h('p', { class: 'home-empty' }, S.noPanes)].filter(Boolean)
+    return [h('div', { class: 'home-head' }, h('h2', {}, S.sessions), shareButton()), ...all.map(sessionItem), all.length ? null : h('p', { class: 'home-empty' }, S.noPanes)].filter(Boolean)
   }
   const p = view.kind === 'project' ? projectList().find(x => x.key === view.key) : null
   const name = p?.name ?? (view.kind === 'needs' ? S.needsYou : S.projectName(view.key ?? ''))
   const sessions = view.kind === 'needs' ? blockedSessions() : p?.sessions ?? sessionsOf(view.key)
   const topics = view.kind === 'needs' ? needsTopics() : p?.topics ?? []
   return [
-    h('div', { class: 'home-head' }, view.kind === 'needs' ? h('span', { class: 'home-icon proj-slot' }, dotEl('red')) : projectIcon(p ?? { name }, 'home-icon'), h('h2', {}, name)),
+    h('div', { class: 'home-head' }, view.kind === 'needs' ? h('span', { class: 'home-icon proj-slot' }, dotEl('red')) : projectIcon(p ?? { name }, 'home-icon'), h('h2', {}, name),
+      view.kind === 'project' ? projectToolButtons(view.key, name) : null),
     ...sessions.map(x => sessionCard(x, term, column)),
     h('div', { class: 'home-topics' }, ...topics.map(t => topicItem(t, p, pick, column))),
     column && view.kind === 'project' ? newConversationRow(view.key, pick) : null,
@@ -1151,8 +1163,8 @@ const CONVO_MIN = 380
 const COLUMNS = [
   { handle: 'side-col-resize', key: 'side-width', prop: '--side-w', min: 200, max: 420, el: () => $('side') },
   { handle: 'home-col-resize', key: 'home-width', prop: '--home-col', min: 220, max: 480, el: () => $('home') },
-  // The board sits on the right, so its handle is its left edge: dragging left widens it.
-  { handle: 'board-col-resize', key: 'board-width', prop: '--board-col', min: 320, max: 1400, el: () => $('board'), dir: -1 },
+  // A tool sits on the right, so its handle is its left edge: dragging left widens it. Was board-width before tools.
+  { handle: 'tool-col-resize', key: 'tool-width', oldKey: 'board-width', prop: '--tool-col', min: 320, max: 1400, el: () => $('tool'), dir: -1 },
 ]
 function colLimit(c) {
   const others = COLUMNS.filter(o => o !== c).map(o => o.el()).reduce((w, el) => w + (el.hidden ? 0 : el.getBoundingClientRect().width), 0)
@@ -1167,7 +1179,7 @@ function setColumn(c, px, save = true) {
 function loadColumns() {
   for (const c of COLUMNS) {
     let px = null
-    try { px = Number(localStorage.getItem(c.key)) || null } catch {}
+    try { px = Number(localStorage.getItem(c.key) ?? (c.oldKey && localStorage.getItem(c.oldKey))) || null } catch {}
     if (px != null) setColumn(c, px, false)
   }
 }
@@ -1241,10 +1253,10 @@ function renderThreads() {
     ctx.replaceChildren(...[
       cur.project && !wide.matches ? h('button', { type: 'button', class: 'context-btn back', onclick: () => openHome({ kind: 'project', key: projectKey(cur.project) }) }, S.back(S.projectName(cur.project))) : null,
       h('span', { class: 'context-text' }, [cur.project ? shortTitle(cur.title, { name: S.projectName(cur.project), key: projectKey(cur.project) }) : cur.title, cur.detail].filter(Boolean).join(' · ')),
-      board.origin ? h('button', { type: 'button', class: `context-btn board-btn${board.open && board.thread === cur.id ? ' on' : ''}`, 'aria-pressed': String(board.open && board.thread === cur.id), onclick: () => toggleBoard(cur.id) }, S.board, h('span', { class: 'context-icon', 'aria-hidden': 'true', html: ICON_BOARD })) : null,
+      ...toolButtons(cur),
       h('button', { type: 'button', class: 'context-btn archive', onclick: () => setArchived(cur, !arch) }, arch ? S.unarchive : S.archive, h('span', { class: 'context-icon', 'aria-hidden': 'true', html: ICON_ARCHIVE }))].filter(Boolean))
   }
-  syncBoard()
+  syncTool()
   if (archivedSheet.open) renderArchived()
   renderNav()
   renderAddress()
@@ -2111,7 +2123,12 @@ const panes = { on: false, digits: false, list: [], updated: null, open: false, 
   // The dialog on screen as a card (web/dialog.js): what it is, its signature (re-render only
   // when it changes), the option just tapped (busy until the screen moves on), the free-text
   // option the prompt line is typing into, and the key bar's manual override (null = auto).
-  dialog: null, dlgSig: '', dlgBusy: null, dlgInput: null, keysOn: null }
+  dialog: null, dlgSig: '', dlgBusy: null, dlgInput: null, keysOn: null,
+  // Earlier turns from the transcript: session, cursor (next page's `before`), button state.
+  hist: null,
+  // One of the hub's own shells (hub/shells.ts): projects that may have one, whether the open
+  // pane is one, when typing was last allowed (Face ID or a write), and a command to confirm.
+  shellsOn: false, shellShare: false, shell: false, armedAt: 0, confirm: null }
 const PANE_ORDER = { blocked: 0, working: 1 }
 const paneInput = $('pane-prompt')
 function setPanes(p) {
@@ -2122,6 +2139,13 @@ function setPanes(p) {
   if (panes.open && panes.id != null) {
     const cur = panes.list.find(x => x.id === panes.id)
     if (cur) setPaneStatus(cur.status)
+    if (cur?.agent === 'claude') $('pane-hist').hidden = false // opened (from a push) before the list came
+    renderTermBtn()
+    if (cur?.agent === 'shell' && !panes.shell) {
+      panes.shell = true
+      $('panes-title').replaceChildren(markEl(cur.agent, 'agent-mark title-mark'), cur.title, h('span', { class: 'shell-badge' }, cur.shell === 'shared' ? S.sharedBadge : S.shellBadge))
+      renderShellBar(); renderPaneKeys(); renderTermBtn()
+    }
     renderFleet()
     // The session ended: the view falls back to its first topic.
     if (!cur && wide.matches) { if (state.home) openHome(state.home); else switchThread(null) }
@@ -2154,9 +2178,11 @@ function showPane(id = null) {
   loadPanes()
 }
 function closePanes() {
+  leaveShell()
   stopPaneScreen()
   panes.open = false
   panes.id = null
+  renderTermBtn()
   panes.raw = null
   panes.dialog = null; panes.dlgSig = ''; panes.dlgBusy = null; panes.dlgInput = null
   paneInput.blur()
@@ -2166,8 +2192,10 @@ function closePanes() {
   applyPendingUpdate()
 }
 function showPaneList() {
+  leaveShell()
   stopPaneScreen()
   panes.id = null
+  renderTermBtn()
   paneInput.blur()
   $('pane-screen').hidden = true
   $('panes-list-body').hidden = false
@@ -2182,14 +2210,16 @@ const paneRow = (p, onclick, current = false) => h('li', {}, h('button', { type:
   projectIcon(paneIcon(p)),
   h('span', { class: 'peer-main' },
     h('span', { class: 'peer-name' }, p.title, h('span', { class: 'peer-state' }, S.paneStatus(p.status))),
-    h('span', { class: 'peer-meta' }, [p.project, p.agent].filter(Boolean).join(' · '))),
+    h('span', { class: 'peer-meta pane-meta' }, markEl(p.agent), [p.project, p.agent === 'shell' ? S.terminal.toLowerCase() : p.agent].filter(Boolean).join(' · '))),
   dotEl(stateClass(p.status), p.status)))
 function renderPaneList() {
   $('panes-title').textContent = S.sessions
   $('panes-sub').textContent = [panes.list.length ? S.fleet(fleetCounts(panes.list)) : '', panes.updated ? S.updatedAgo(Date.now() - panes.updated) : ''].filter(Boolean).join(' · ')
   const ul = $('pane-list')
-  if (!panes.list.length) return ul.replaceChildren(h('li', { class: 'peer-empty' }, S.noPanes))
-  ul.replaceChildren(...sortedPanes().map(p => paneRow(p, () => openPane(p.id))))
+  const share = shareButton()
+  const head = share ? [h('li', { class: 'share-row' }, share)] : []
+  if (!panes.list.length) return ul.replaceChildren(...head, h('li', { class: 'peer-empty' }, S.noPanes))
+  ul.replaceChildren(...head, ...sortedPanes().map(p => paneRow(p, () => openPane(p.id))))
 }
 // The fleet strip over a pane's screen: a dot and a count per state; tap it to switch.
 function renderFleet() {
@@ -2223,6 +2253,7 @@ function stepPane(dir) {
   if (wide.matches) selectSession(next); else openPane(next)
 }
 function openPane(id) {
+  leaveShell(id)
   stopPaneScreen()
   panes.id = id
   panes.gone = false
@@ -2232,11 +2263,16 @@ function openPane(id) {
   panes.dialog = null; panes.dlgSig = ''; panes.dlgBusy = null; panes.dlgInput = null; panes.keysOn = null
   renderDialog()
   const p = panes.list.find(x => x.id === id)
-  $('panes-title').textContent = p?.title ?? id
+  panes.shell = p?.agent === 'shell'
+  panes.confirm = null
+  renderTermBtn()
+  $('panes-title').replaceChildren(p ? markEl(p.agent, 'agent-mark title-mark') : '', p?.title ?? id, panes.shell ? h('span', { class: 'shell-badge' }, p.shell === 'shared' ? S.sharedBadge : S.shellBadge) : '')
+  renderShellBar()
   $('panes-sub').textContent = p ? [p.project, S.paneStatus(p.status)].filter(Boolean).join(' · ') : ''
   $('panes-list-body').hidden = true
   $('pane-screen').hidden = false
   $('pane-lines').replaceChildren()
+  resetHist(p)
   paneInput.placeholder = S.panePrompt
   panes.digits = false
   renderPaneKeys()
@@ -2289,7 +2325,7 @@ function renderPaneText(raw, force = false) {
   // screen again with the keys on, to check the card against).
   const d = dialogOf(raw)
   if (panes.dialog && !keysShown() && d && JSON.stringify(d) === panes.dlgSig && d.top > 0) lines = lines.slice(0, d.top)
-  const { cols, rows } = layoutScreen(lines)
+  const { cols, rows } = layoutScreen(lines, { join: !panes.shell })
   const cs = getComputedStyle(box)
   const avail = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
   const ratio = monoAdvance(out)
@@ -2352,8 +2388,213 @@ new ResizeObserver(([e]) => {
   else if (panes.stick) $('pane-text').scrollTop = $('pane-text').scrollHeight
 }).observe($('pane-text'))
 darkMode.addEventListener?.('change', () => { if (panes.raw != null) renderPaneText(panes.raw, true) })
+// ---------- shells: plain terminals the hub opened (hub/shells.ts) ----------
+// Opening one takes Face ID; so does typing after SHELL_ARM_MS without a write or after the
+// app was in the background. A risky command comes back as a confirm card. Leaving the shell
+// (another session, the list, Done) closes it; the hub also closes it after 10 min idle.
+const SHELL_ARM_MS = 4.5 * 60_000 // a little under the hub's 5 min, so the hub never has to refuse
+const shellPost = (id, what) => api(`api/shells/${encodeURIComponent(id)}/${what}`, { method: 'POST', headers: { 'x-hub-action': '1' }, body: '{}' })
+const isShared = id => panes.list.find(x => x.id === id)?.shell === 'shared'
+// On a session's screen: a terminal in that session's folder (Face ID in the tap).
+function renderTermBtn() {
+  const p = panes.list.find(x => x.id === panes.id)
+  // A session and its terminal are siblings: >_ opens the terminal, the same slot closes it.
+  const closing = !!(panes.open && panes.shell && panes.id != null && !panes.gone)
+  const on = closing || !!(panes.open && panes.on && panes.shellsOn && p && p.agent !== 'shell' && p.cwd && !panes.gone)
+  // At the right end of the session's (or terminal's) header. No hover title: one was left
+  // up when the button changed under the pointer.
+  for (const b of [$('pane-term-btn')]) {
+    b.hidden = !on
+    b.classList.toggle('closing', closing)
+    b.setAttribute('aria-label', closing ? S.shellClose : S.openTerminal)
+    b.innerHTML = closing ? ICON_TERMINAL_CLOSE : ICON_TERMINAL
+  }
+}
+function openTerminal() {
+  const from = panes.id
+  if (from == null) return
+  if (!lockState.enabled) return toast(S.shellLockOff, 4000)
+  // Face ID has to start inside this tap, so no await before it.
+  stepUp().then(async () => {
+    try {
+      const r = await api('api/shells', { method: 'POST', headers: { 'x-hub-action': '1' }, body: JSON.stringify({ pane: from }) })
+      panes.armedAt = Date.now()
+      panes.shellFrom = from
+      await loadPanes()
+      openPanes(r.id)
+    } catch (e) {
+      const code = e.body?.code
+      toast(code === 'too_many' ? S.shellTooMany : code === 'lock_off' ? S.shellLockOff : code === 'no_folder' ? S.shellNoFolder : S.shellOpenFailed, 4000)
+    }
+  }, () => toast(S.stepupFailed))
+}
+// Closing goes back to the session it was opened from (leaving the terminal closes it).
+function closeTerminal() {
+  const back = panes.shellFrom
+  if (back != null && back !== panes.id && panes.list.some(x => x.id === back)) return openPanes(back)
+  if (wide.matches) closePanes(); else showPaneList()
+}
+const termTap = () => (panes.shell ? closeTerminal() : openTerminal())
+$('pane-term-btn').addEventListener('click', termTap)
+// Share one of your own terminals: Face ID (in the tap) lists the plain ones, a tap shows it here.
+const shareButton = () => panes.on && panes.shellsOn && panes.shellShare
+  ? h('button', { type: 'button', class: 'context-btn shell-btn share-btn', title: S.shareHint, onclick: openShareSheet }, S.shareTerminal) : null
+function openShareSheet() {
+  if (!lockState.enabled) return toast(S.shellLockOff, 4000)
+  stepUp().then(async () => {
+    $('share-sub').textContent = S.shareSub
+    $('share-list').replaceChildren(h('li', { class: 'peer-empty' }, S.paneEarlierLoading))
+    shareSheet.show()
+    try {
+      const { terminals } = await api('api/shells/shareable', { method: 'POST', headers: { 'x-hub-action': '1' }, body: '{}' })
+      if (!terminals.length) return $('share-list').replaceChildren(h('li', { class: 'peer-empty' }, S.shareNone))
+      $('share-list').replaceChildren(...terminals.map(t => h('li', {}, h('button', { type: 'button', class: 'peer pane-row', onclick: () => shareTerminal(t.id) },
+        h('span', { class: 'peer-main' },
+          h('span', { class: 'peer-name' }, t.title),
+          h('span', { class: 'peer-meta' }, [String(t.cwd ?? '').replace(/^\/Users\/[^/]+/, '~'), t.backend].filter(Boolean).join(' · ')))))))
+    } catch (e) {
+      $('share-list').replaceChildren(h('li', { class: 'peer-empty' }, e.body?.code === 'stepup' ? S.shellStepup : S.shareFailed))
+    }
+  }, () => toast(S.stepupFailed))
+}
+async function shareTerminal(id) {
+  try {
+    await api('api/shells/share', { method: 'POST', headers: { 'x-hub-action': '1' }, body: JSON.stringify({ id }) })
+    shareSheet.hide()
+    panes.armedAt = Date.now()
+    await loadPanes()
+    openPanes(id)
+  } catch (e) {
+    const code = e.body?.code
+    toast(code === 'too_many' ? S.shellTooMany : code === 'stepup' ? S.shareAgain : code === 'not_shareable' ? S.shareGone : S.shareFailed, 4000)
+  }
+}
+/** Resolves when the open shell may be typed into: at once, or after Face ID (started in the tap). */
+function shellArmed() {
+  if (!panes.shell || !lockState.enabled || Date.now() - panes.armedAt < SHELL_ARM_MS) return Promise.resolve()
+  return stepUp().then(() => { panes.armedAt = Date.now() }, e => { toast(S.stepupFailed); throw Object.assign(e ?? new Error('stepup'), { stepup: true }) })
+}
+/** A shell's refusal (Face ID needed, the lock off): handled here, true if it was one. */
+function shellRefused(e) {
+  const code = e?.body?.code
+  if (code === 'stepup') { panes.armedAt = 0; toast(S.shellStepup, 3000); return true }
+  if (code === 'lock_off') { toast(S.shellLockOff, 4000); return true }
+  return !!e?.stepup // Face ID was cancelled: nothing was sent, and it said so
+}
+function leaveShell(nextId = null) {
+  if (!panes.shell || panes.id == null || panes.id === nextId) return
+  const id = panes.id, shared = isShared(id)
+  panes.shell = false; panes.armedAt = 0; panes.confirm = null
+  renderShellBar()
+  shellPost(id, 'close').then(() => { toast(shared ? S.shellUnshared : S.shellClosed, 1800); loadPanes() }, () => {})
+}
+function renderShellBar() {
+  const bar = $('pane-shell')
+  bar.hidden = !panes.shell
+  if (!panes.shell) { $('pane-shell-confirm').replaceChildren(); $('pane-shell-confirm').hidden = true; return }
+  const p = panes.list.find(x => x.id === panes.id)
+  const shared = p?.shell === 'shared'
+  // Closing is the top bar's ×; a shared terminal (sharing is opt-in) keeps Stop sharing here.
+  bar.replaceChildren(h('span', { class: 'shell-note' }, (shared ? S.shellNoteShared : S.shellNote)(p?.cwd ?? '')),
+    ...(shared ? [h('button', { type: 'button', class: 'text-btn shell-close', onclick: closeTerminal }, S.shellStopSharing)] : []))
+  renderShellConfirm()
+}
+function renderShellConfirm() {
+  const box = $('pane-shell-confirm'), c = panes.confirm
+  box.hidden = !c
+  if (!c) return box.replaceChildren()
+  const run = async () => {
+    panes.confirm = null; renderShellConfirm()
+    try {
+      await shellArmed()
+      await paneWrite('prompt', { text: c.text, confirm: true })
+      panes.armedAt = Date.now()
+      if (paneInput.value === c.text) { paneInput.value = ''; growPaneInput(); refreshPaneSend() }
+      setTimeout(pollPaneScreen, 300)
+    } catch (e) { if (!shellRefused(e)) paneWriteFailed(e) }
+  }
+  box.replaceChildren(h('div', { class: 'card question pane-card permission' },
+    h('div', { class: 'q-prompt' }, S.shellConfirmTitle),
+    h('pre', { class: 'shell-cmd' }, c.text),
+    h('div', { class: 'detail' }, S.shellConfirmWhy(c.reason)),
+    h('div', { class: 'pills-row' },
+      h('button', { type: 'button', class: 'pill-btn primary-pill', onclick: run }, S.shellRun),
+      h('button', { type: 'button', class: 'pill-btn', onclick: () => { panes.confirm = null; renderShellConfirm() } }, S.paneCancel))))
+}
+
+// ---------- earlier turns, from the session's transcript ----------
+// A Claude Code session draws on the alternate screen, so its pane only ever holds one screen.
+// "Load earlier" reads the turns before it from the transcript (hub/transcript.ts), a page at
+// a time going back, and keeps the reader's place while a page lands above.
+function resetHist(p) {
+  panes.hist = { id: panes.id, session: null, next: undefined, loading: false, state: 'more', count: 0 }
+  $('pane-hist-items').replaceChildren()
+  $('pane-hist').hidden = p?.agent !== 'claude'
+  renderHistBtn()
+}
+function renderHistBtn() {
+  const st = panes.hist?.state ?? 'more', b = $('pane-hist-more')
+  b.textContent = { more: S.paneEarlier, loading: S.paneEarlierLoading, none: S.paneEarlierNone, start: S.paneEarlierStart, failed: S.paneEarlierFailed }[st]
+  b.disabled = st === 'loading' || st === 'none' || st === 'start'
+}
+async function loadEarlier(tries = 0) {
+  const hs = panes.hist
+  if (!hs || hs.loading || hs.next === null) return
+  hs.loading = true; hs.state = 'loading'; renderHistBtn()
+  try {
+    const r = await api(`api/panes/${encodeURIComponent(hs.id)}/history?${qs({ limit: 20, before: hs.next, session: hs.session })}`)
+    if (panes.hist !== hs) return
+    if (hs.session && r.session !== hs.session) { $('pane-hist-items').replaceChildren(); hs.count = 0 } // a new session (/clear): start over
+    hs.session = r.session; hs.next = r.next; hs.loading = false
+    prependHist(r.items)
+    hs.state = r.next == null ? (hs.count ? 'start' : 'none') : 'more'
+    renderHistBtn()
+    if (!r.items.length && r.next != null && tries < 3) loadEarlier(tries + 1) // a stretch with nothing to show
+  } catch (e) {
+    if (panes.hist !== hs) return
+    hs.loading = false
+    hs.state = e.status === 404 ? 'none' : 'failed'
+    renderHistBtn()
+  }
+}
+$('pane-hist-more').addEventListener('click', () => loadEarlier())
+function prependHist(items) {
+  if (!items.length) return
+  const box = $('pane-text'), wrap = $('pane-hist-items')
+  const nodes = histNodes(items)
+  if (!wrap.childElementCount) nodes.push(h('div', { class: 'ph-now' }, S.paneNow))
+  const top = box.scrollTop, height = box.scrollHeight
+  wrap.prepend(...nodes)
+  panes.hist.count += items.length
+  box.scrollTop = top + (box.scrollHeight - height) // what the reader was looking at stays put
+}
+const histTime = ts => {
+  const d = new Date(ts)
+  return dayKey(d) === dayKey(Date.now()) ? timeFmt.format(d) : `${dayFmt.format(d)}, ${timeFmt.format(d)}`
+}
+function histNodes(items) {
+  const out = []
+  let tools = []
+  const flush = () => {
+    if (!tools.length) return
+    const rows = tools.map(t => h('div', { class: `ph-tool${t.error ? ' error' : ''}`, title: t.text }, t.text))
+    out.push(tools.length > 3 ? h('details', { class: 'ph-tools' }, h('summary', {}, S.paneToolCalls(tools.length)), ...rows) : h('div', { class: 'ph-toolrun' }, ...rows))
+    tools = []
+  }
+  for (const it of items) {
+    if (it.kind === 'tool') { tools.push(it); continue }
+    flush()
+    if (it.kind === 'user') out.push(h('div', { class: 'ph ph-user' }, it.ts ? h('span', { class: 'ph-time' }, histTime(it.ts)) : null, it.text))
+    else if (it.kind === 'assistant') out.push(addCopyButtons(h('div', { class: 'ph ph-assistant md', html: md(it.text) })))
+    else if (it.kind === 'peer') out.push(h('div', { class: 'ph ph-peer' }, h('b', {}, it.name), it.text))
+    else out.push(h('div', { class: 'ph ph-note' }, it.text))
+  }
+  flush()
+  return out
+}
 function paneGone() {
   panes.gone = true
+  renderTermBtn()
   panes.raw = null
   panes.dialog = null; panes.dlgSig = ''; panes.dlgInput = null
   renderDialog()
@@ -2378,7 +2619,7 @@ function dialogOf(raw) {
 }
 const keysShown = () => !panes.gone && (panes.keysOn ?? (panes.status === 'blocked' && !panes.dialog))
 function updateDialog() {
-  const d = !panes.gone ? dialogOf(panes.raw) : null
+  const d = !panes.gone && !panes.shell ? dialogOf(panes.raw) : null
   const st = panes.status
   const dialog = cardable(d) && (st === 'blocked' || ((st == null || st === 'unknown') && !!d.footer)) ? d : null
   const sig = dialog ? JSON.stringify(dialog) : ''
@@ -2400,7 +2641,7 @@ function refreshPaneChrome() {
   const blocked = panes.status === 'blocked', card = !!panes.dialog, typing = !!panes.dlgInput
   $('pane-screen').classList.toggle('blocked', blocked)
   paneInput.disabled = panes.gone || ((blocked || card) && !typing)
-  paneInput.placeholder = typing ? S.paneTypeHint : card ? S.paneCardHint : blocked ? S.paneBlockedHint : S.panePrompt
+  paneInput.placeholder = panes.shell ? S.shellPrompt : typing ? S.paneTypeHint : card ? S.paneCardHint : blocked ? S.paneBlockedHint : S.panePrompt
   const keys = keysShown()
   $('pane-keys').hidden = !keys
   const kb = $('pane-keys-btn')
@@ -2576,6 +2817,7 @@ function renderPaneKeys() {
   }
   const fold = open => { panes.digits = open; renderPaneKeys(); refreshPaneChrome() }
   const rows = S.paneKeys.map(row => row.map(k => key(k, b => (k.fold ? fold(true) : sendPaneKey(k.key, b)))))
+  if (panes.shell) rows[1].unshift(key({ label: '^C', aria: S.shellCtrlC }, b => sendPaneKey('ctrl+c', b)))
   if (panes.digits) rows[0] = [key({ label: '‹', aria: S.paneDigitsClose }, () => fold(false)),
     ...S.paneDigits.map(d => key({ label: d }, async b => { await sendPaneKey(d, b); setTimeout(() => panes.digits && fold(false), 500) }))]
   $('pane-keys').replaceChildren(...rows.map(r => h('div', { class: 'pane-keys-row' }, ...r)))
@@ -2585,11 +2827,14 @@ async function sendPaneKey(key, btn) {
   if (panes.id == null || panes.gone) return
   btn.classList.remove('sent', 'failed')
   try {
+    await shellArmed() // a shell wants Face ID after a pause; it has to start in this tap
     await paneWrite('keys', { keys: [key] })
+    if (panes.shell) panes.armedAt = Date.now()
     flashKey(btn, 'sent')
     setTimeout(pollPaneScreen, 250) // show the result without waiting for the next poll
   } catch (e) {
     flashKey(btn, 'failed')
+    if (shellRefused(e)) return
     if (e.status === 404) paneGone(); else toast(S.paneSendFailed)
   }
 }
@@ -2605,14 +2850,18 @@ $('pane-prompt-form').addEventListener('submit', async e => {
   if (panes.dlgInput) return sendDialogText(text)
   $('pane-send').disabled = true
   try {
+    await shellArmed()
     await paneWrite('prompt', { text })
+    if (panes.shell) panes.armedAt = Date.now()
     paneInput.value = ''
     clearPaneDict()
     growPaneInput()
     toast(S.paneSent, 1200)
     setTimeout(pollPaneScreen, 300)
   } catch (err) {
-    if (err.status === 409) { toast(S.paneBlocked); setPaneStatus('blocked') }
+    if (err.body?.code === 'confirm') { panes.confirm = { text, reason: err.body.reason }; renderShellConfirm() }
+    else if (shellRefused(err)) {}
+    else if (err.status === 409) { toast(S.paneBlocked); setPaneStatus('blocked') }
     else if (err.status === 404) paneGone()
     else toast(S.paneSendFailed)
   }
@@ -2644,7 +2893,13 @@ for (const el of [$('panes-heading'), $('pane-fleet')]) {
     if (Math.abs(dx) > 60 && Math.abs(dy) < 40) { e.preventDefault(); stepPane(dx < 0 ? 1 : -1) } // preventDefault: no click after a swipe
   })
 }
-document.addEventListener('visibilitychange', () => { if (!document.hidden && panes.open && panes.id != null) pollPaneScreen() })
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && panes.open && panes.id != null) pollPaneScreen()
+  if (document.hidden && panes.shell && panes.id != null) { // Face ID again when it comes back
+    panes.armedAt = 0
+    shellPost(panes.id, 'disarm').catch(() => {})
+  }
+})
 setInterval(() => { if (panes.open && panes.id == null && panes.updated) $('panes-sub').textContent = S.updatedAgo(Date.now() - panes.updated) }, 30000)
 
 // ---------- sheets: one bottom-sheet behaviour for every sheet ----------
@@ -2753,6 +3008,7 @@ function makeSheet(backdrop) {
 const actionSheet = makeSheet($('sheet'))
 const peersSheet = makeSheet($('peers-sheet'))
 const panePick = makeSheet($('pane-pick-sheet'))
+const shareSheet = makeSheet($('share-sheet'))
 const tasksSheet = makeSheet($('tasks-sheet'))
 const settingsSheet = makeSheet($('settings-sheet'))
 const archivedSheet = makeSheet($('archived-sheet'))
@@ -3233,8 +3489,13 @@ function stepUp() {
   delete o.at
   return navigator.credentials.get({ publicKey: { ...o, challenge: b64ToBytes(o.challenge), allowCredentials: withIds(o.allowCredentials) } })
     .then(c => api('api/auth/login/verify', { method: 'POST', body: JSON.stringify({ response: credJSON(c) }) }))
+    .then(r => { rememberPasskey(r?.id); return r })
     .finally(prefetchLock)
 }
+// The passkey this browser last unlocked with: Settings marks it "This device".
+const PASSKEY_KEY = 'hub-passkey'
+function rememberPasskey(id) { if (typeof id === 'string') try { localStorage.setItem(PASSKEY_KEY, id) } catch {} }
+function thisPasskey() { try { return localStorage.getItem(PASSKEY_KEY) } catch { return null } }
 
 function showLock() {
   lockState.enabled = true
@@ -3277,7 +3538,7 @@ function registerPasskey(okText) {
   const authenticatorSelection = okText ? { ...o.authenticatorSelection, authenticatorAttachment: 'platform' } : o.authenticatorSelection
   navigator.credentials.create({ publicKey: { ...o, authenticatorSelection, challenge: b64ToBytes(o.challenge), user: { ...o.user, id: b64ToBytes(o.user.id) }, excludeCredentials: withIds(o.excludeCredentials) } })
     .then(c => api('api/auth/register/verify', { method: 'POST', body: JSON.stringify({ response: credJSON(c), name: isIOS ? 'iPhone' : /Mac/.test(navigator.platform) ? 'Mac' : navigator.platform }) }))
-    .then(async () => { await loadLock(); toast(okText ?? S.lockOn(lockState.idleMin), 5000); if (settingsSheet.open) renderSettings() },
+    .then(async r => { rememberPasskey(r?.id); await loadLock(); toast(okText ?? S.lockOn(lockState.idleMin), 5000); if (settingsSheet.open) renderSettings() },
       e => { prefetchLock(); toast(e?.name === 'InvalidStateError' ? S.passkeyExists : failed, 5000); if (settingsSheet.open) renderSettings() })
 }
 /** Adding a passkey takes two taps: browsers want a tap right before each passkey prompt. */
@@ -3286,6 +3547,73 @@ function confirmAddPasskey() {
     .then(() => api('api/auth/register/options', { method: 'POST', body: '{}' }))
     .then(o => { lockState.regOpts = { ...o, at: Date.now() }; if (settingsSheet.open) renderSettings() })
     .catch(() => toast(S.passkeyAddFailed))
+}
+
+// ---------- passkeys in Settings: tap one to rename or remove it ----------
+// Both need a fresh Face ID, which has to start inside the tap (stepUp first, no await before it).
+// The last passkey can't be removed here: that would turn the lock off (the hub machine does that).
+const keyEdit = { id: null, confirm: false, focus: false }
+const ICON_TRASH = '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4.5 6.5h15M9.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v1.5M6.5 6.5l.8 12a1.5 1.5 0 0 0 1.5 1.4h6.4a1.5 1.5 0 0 0 1.5-1.4l.8-12M10 10.5v6M14 10.5v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
+function passkeyRows(p, count) {
+  const mine = p.id === thisPasskey()
+  const name = p.name || S.passkeys
+  const dates = S.passkeyLine(shortDate(p.created), shortDate(p.last_used))
+  const tag = mine ? h('span', { class: 'key-mine' }, S.thisDevice) : null
+  const close = () => { keyEdit.id = null; keyEdit.confirm = false; renderSettings() }
+  if (keyEdit.id !== p.id) {
+    return [h('button', { type: 'button', class: 'set-row set-row-btn', 'aria-expanded': 'false',
+      onclick: () => { keyEdit.id = p.id; keyEdit.confirm = false; keyEdit.focus = true; renderSettings() } },
+      h('span', { class: 'set-label' }, h('span', {}, name, tag), h('span', { class: 'set-sub' }, dates)))]
+  }
+  // Tapped: the row itself turns into the editor (or the remove question).
+  if (keyEdit.confirm) {
+    return [h('div', { class: 'set-row key-edit' },
+      h('span', { class: 'set-sub key-ask' }, S.removePasskeyAsk(name, mine)),
+      h('span', { class: 'key-btns' },
+        h('button', { type: 'button', class: 'set-btn plain', onclick: () => { keyEdit.confirm = false; renderSettings() } }, S.cancel),
+        h('button', { type: 'button', class: 'set-btn danger', onclick: () => removePasskey(p, mine) }, S.remove)))]
+  }
+  // Save shows only once the name was changed; Remove is a trash icon (it still asks first).
+  const save = h('button', { type: 'button', class: 'set-btn plain', hidden: true, onclick: () => renamePasskey(p, input.value) }, S.save)
+  const changed = () => { const v = input.value.trim(); return !!v && v !== (p.name ?? '') }
+  const input = h('input', { class: 'key-name', type: 'text', value: p.name ?? '', maxlength: '60', 'aria-label': S.passkeyName, enterkeyhint: 'done',
+    oninput: () => { save.hidden = !changed() },
+    onkeydown: e => {
+      if (e.key === 'Enter') { e.preventDefault(); renamePasskey(p, input.value) }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close() }
+    },
+    // Leaving the field unchanged puts the row back (after a beat, so a tap on the trash lands first).
+    onblur: () => setTimeout(() => {
+      if (keyEdit.id === p.id && !keyEdit.confirm && !changed() && !row.contains(document.activeElement) && row.isConnected) close()
+    }, 250) })
+  let trash = null
+  if (count > 1) {
+    trash = h('button', { type: 'button', class: 'icon-btn key-trash', 'aria-label': S.removePasskey, onclick: () => { keyEdit.confirm = true; renderSettings() } })
+    trash.innerHTML = ICON_TRASH
+  }
+  // Field and buttons on one line, so Save and the trash line up with the field; the dates go under it.
+  const row = h('div', { class: 'set-row key-edit key-editor' },
+    h('span', { class: 'key-line' }, input, h('span', { class: 'key-btns' }, save, trash)),
+    h('span', { class: 'set-sub' }, count > 1 ? dates : S.lastPasskey))
+  if (keyEdit.focus) { keyEdit.focus = false; requestAnimationFrame(() => input.focus()) }
+  return [row]
+}
+function keyAction(path, body, done) {
+  stepUp()
+    .then(() => api(path, { method: 'POST', headers: { 'x-hub-action': '1' }, body: JSON.stringify(body) }))
+    .then(async r => { keyEdit.id = null; keyEdit.confirm = false; await loadLock(); done(r); if (settingsSheet.open) renderSettings() })
+    .catch(e => toast(e?.body?.code === 'last_passkey' ? S.lastPasskey : e?.message === 'not ready' ? S.tryAgain : S.passkeyChangeFailed, 5000))
+}
+function renamePasskey(p, value) {
+  const name = value.trim()
+  if (!name || name === p.name) { keyEdit.id = null; return renderSettings() }
+  keyAction('api/auth/passkeys/rename', { id: p.id, name }, () => toast(S.passkeyRenamed))
+}
+function removePasskey(p, mine) {
+  keyAction('api/auth/passkeys/remove', { id: p.id }, () => {
+    if (mine) try { localStorage.removeItem(PASSKEY_KEY) } catch {}
+    toast(S.passkeyRemoved(mine), 8000)
+  })
 }
 
 // ---------- settings: a sheet from the title ----------
@@ -3311,8 +3639,8 @@ async function renderSettings() {
       : lockState.enabled ? h('button', { type: 'button', class: 'set-btn plain', onclick: () => { settingsSheet.hide(); lockNow() } }, S.lockNow)
       : h('button', { type: 'button', class: 'set-btn', onclick: () => registerPasskey() }, S.turnOn),
     S.lockStatus(lockState.enabled, lockState.idleMin))]
-  for (const p of lockState.enabled ? lockState.passkeys ?? [] : [])
-    lockRows.push(setRow(p.name || S.passkeys, null, S.passkeyLine(shortDate(p.created), shortDate(p.last_used))))
+  const keys = lockState.enabled ? lockState.passkeys ?? [] : []
+  for (const p of keys) lockRows.push(...passkeyRows(p, keys.length))
   if (lockState.enabled && window.PublicKeyCredential) {
     const ready = fresh(lockState.regOpts)
     lockRows.push(setRow(S.addPasskeyLabel, h('button', { type: 'button', class: 'set-btn', onclick: ready ? () => registerPasskey(S.passkeyAdded) : confirmAddPasskey }, ready ? S.addThisDevice : S.addPasskey), ready ? S.addThisDeviceHint : null))
@@ -3329,6 +3657,7 @@ async function renderSettings() {
     ]))
 }
 async function openSettings() {
+  keyEdit.id = null; keyEdit.confirm = false
   await loadLock()
   await renderSettings()
   settingsSheet.show()
@@ -3391,11 +3720,14 @@ async function loadConfig(pane) {
     state.login = c.login
     dictation.on = !!c.dictation; dictation.refine = !!c.refine
     $('rec-refine').hidden = !dictation.on
-    board.origin = c.board || null
-    board.user = c.user_name || 'You'
-    board.answerer = c.board_answerer || 'agent'
-    if (board.origin) renderThreads()
+    // A tool on this app's own origin is never framed (see openTool).
+    tools.list = (Array.isArray(c.tools) ? c.tools : []).filter(t => t && t.origin !== location.origin)
+    tools.user = c.user_name || 'You'
+    tools.agent = { id: c.agent_id || 'agent', name: c.name || '' }
+    if (tools.list.length) renderThreads()
     panes.on = !!c.panes
+    panes.shellsOn = c.shells === true
+    panes.shellShare = c.shell_share === true
     $('panes-btn').hidden = !panes.on
     if (!panes.on) return
     await loadPanes()
@@ -3406,125 +3738,253 @@ async function loadConfig(pane) {
   } catch {}
 }
 
-// ---------- board: a topic's whiteboard (Board), embedded ----------
-// Board's host bridge v1 (docs/host-bridge.md in Board): Board says hello until we init it, then
-// ready; a comment for the agent is posted into the topic as the user (snapshot + context attached) and
-// acked within 10 s; status says whether it's drawing and how many threads are open. Messages
-// count only from the board's origin and from this iframe's window.
-const board = { origin: null, answerer: 'agent', open: false, thread: null, id: null, frame: null, ready: false, link: null, status: null, timer: 0 }
-const BOARD_PROTOCOL = { protocol: 'board-host', v: 1 }
-const BOARD_ACK_MS = 9000
-const boardUrl = (id, host) => `${board.origin}/b/${encodeURIComponent(id)}${host ? '?host=1' : ''}`
-function toggleBoard(thread) {
-  if (board.open && board.thread === thread) return closeBoard()
-  openBoard(thread)
+// ---------- tools: a topic's tool (Board, the whiteboard, say), embedded ----------
+// Each tool runs on its own origin and talks over postMessage, protocol `bebop-tool` v1 (SPEC.md,
+// Tools): it says hello until we init it, then ready; status is a short line; a post goes into the
+// topic as the user (files attached) and is acked within 10 s. Board's own `board-host` v1 bridge is
+// still accepted from the "board" tool until Board speaks bebop-tool. Messages count only from the
+// tool's origin and from this iframe's window; we answer only to that origin.
+const tools = { list: [], user: 'You', agent: { id: 'agent', name: '' } }
+// A project tool (scope "project") opens at a page: the topic's id, or "overview" from the project's
+// header (then thread is null, project is the key, and from is the topic shown when it opened).
+const panel = { tool: null, thread: null, project: null, page: null, from: null, instance: null, origin: null, frame: null, ready: false, link: null, status: null, timer: 0 }
+const OVERVIEW_PAGE = 'overview'
+const TOOL_ACK_MS = 9000
+const TOOL_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads'
+const TOOL_FILES_MAX = 4, TOOL_BYTES_MAX = 10 * 1024 * 1024
+const TOOL_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/json', 'text/plain'])
+const TOOL_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'application/json': '.json', 'text/plain': '.txt' }
+const ICON_TOOL = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8" fill="none"/><rect x="13" y="4" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8" fill="none"/><rect x="4" y="13" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M16.5 13.5v6M13.5 16.5h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
+const toolById = id => tools.list.find(t => t.id === id)
+const httpUrlOn = (s, origin) => { try { const u = new URL(s); return u.origin === origin ? u.href : null } catch { return null } }
+
+const toolIconEl = t => t.icon ? h('img', { class: 'context-icon', src: t.icon, alt: '' }) : h('span', { class: 'context-icon', 'aria-hidden': 'true', html: t.id === 'board' ? ICON_BOARD : ICON_TOOL })
+// One context-bar button per tool.
+function toolButtons(cur) {
+  return tools.list.map(t => {
+    const on = panel.tool === t.id && panel.thread === cur.id
+    return h('button', { type: 'button', class: `context-btn tool-btn${on ? ' on' : ''}`, 'aria-pressed': String(on), onclick: () => toggleTool(t.id, cur.id) }, t.name, toolIconEl(t))
+  })
 }
-async function openBoard(thread) {
-  if (!board.origin || !thread) return
-  let id
-  try { id = (await api(`api/threads/${encodeURIComponent(thread)}/board`, { method: 'POST', headers: { 'x-hub-action': '1' } })).board } catch { return toast(S.boardFailed) }
+// A project's header: one button per project tool, opening its overview page.
+function projectToolButtons(key, name) {
+  const list = tools.list.filter(t => t.scope === 'project')
+  if (!list.length) return null
+  return h('span', { class: 'home-tools' }, ...list.map(t => {
+    const on = panel.tool === t.id && panel.thread == null && panel.project === key
+    return h('button', { type: 'button', class: `context-btn tool-btn${on ? ' on' : ''}`, 'aria-pressed': String(on), title: S.toolOverview(t.name, name),
+      onclick: () => on ? closeTool() : openProjectTool(t.id, key, name) }, t.name, toolIconEl(t))
+  }))
+}
+function toggleTool(id, thread) {
+  if (panel.tool === id && panel.thread === thread) return closeTool()
+  openTool(id, thread)
+}
+async function openTool(id, thread) {
+  const tool = toolById(id)
+  if (!tool || !thread) return
+  let r
+  try { r = await api(`api/threads/${encodeURIComponent(thread)}/tools/${id}`, { method: 'POST', headers: { 'x-hub-action': '1' } }) } catch { return toast(S.toolFailed(tool.name)) }
   if (state.thread !== thread) return // moved on while it was asked for
-  if (board.open && board.id === id) return
-  board.open = true; board.thread = thread; board.id = id
-  board.ready = false; board.status = null; board.link = boardUrl(id, false)
-  const frame = h('iframe', { src: boardUrl(id, true), allow: 'clipboard-write', title: S.board })
-  board.frame = frame
-  $('board-frame').replaceChildren(frame)
-  clearTimeout(board.timer)
-  board.timer = setTimeout(() => { if (board.frame === frame && !board.ready) renderBoardHead(S.boardNoAnswer) }, 12000)
-  $('board').hidden = false
-  $('app').classList.add('board-on')
+  showTool(tool, r, { thread })
+}
+// From the project's header: the project tool's overview page. On the phone it covers the Topics sheet.
+async function openProjectTool(id, key, name) {
+  const tool = toolById(id)
+  if (!tool || !key) return
+  let r
+  try { r = await api(`api/projects/${encodeURIComponent(key)}/tools/${id}`, { method: 'POST', headers: { 'x-hub-action': '1' }, body: JSON.stringify({ name }) }) } catch { return toast(S.toolFailed(tool.name)) }
+  if (!wide.matches && topicsSheet.open) topicsSheet.hide()
+  showTool(tool, r, { thread: null, project: key, from: state.thread })
+}
+function showTool(tool, r, at) {
+  const id = tool.id, thread = at.thread
+  if (panel.tool === id && panel.instance === r.instance && panel.page === (r.page ?? null) && panel.thread === thread) return
+  // Never this app's origin: a same-origin frame could call our /api as the user.
+  const src = httpUrlOn(r.frame, tool.origin)
+  if (!src || tool.origin === location.origin) return toast(S.toolFailed(tool.name))
+  const project = at.project ?? (r.scope === 'project' ? projectKey(state.threads.find(t => t.id === thread)?.project) || null : null)
+  Object.assign(panel, { tool: id, thread, project, page: r.page ?? null, from: at.from ?? null, instance: r.instance, origin: tool.origin, ready: false, status: null, link: httpUrlOn(r.link, tool.origin) ?? src })
+  const frame = h('iframe', { src, sandbox: TOOL_SANDBOX, allow: tool.allow.join('; ') || null, referrerpolicy: 'origin', title: tool.name })
+  panel.frame = frame
+  $('tool-frame').replaceChildren(frame)
+  clearTimeout(panel.timer)
+  panel.timer = setTimeout(() => { if (panel.frame === frame && !panel.ready) renderToolHead(S.toolNoAnswer(tool.name)) }, 12000)
+  $('tool').hidden = false
+  $('app').classList.add('tool-on')
   loadColumns()
-  syncBoardModal()
-  renderBoardHead()
+  syncToolModal()
+  renderToolHead()
   renderThreads()
 }
-function closeBoard() {
-  if (!board.open) return
-  board.open = false; board.thread = null; board.id = null; board.frame = null; board.ready = false; board.status = null
-  clearTimeout(board.timer)
-  $('board-frame').replaceChildren()
-  $('board').hidden = true
-  $('app').classList.remove('board-on')
-  syncBoardModal()
+function closeTool() {
+  if (!panel.tool) return
+  Object.assign(panel, { tool: null, thread: null, project: null, page: null, from: null, instance: null, origin: null, frame: null, ready: false, status: null, link: null })
+  clearTimeout(panel.timer)
+  $('tool-frame').replaceChildren()
+  $('tool').hidden = true
+  $('app').classList.remove('tool-on')
+  syncToolModal()
   renderThreads()
 }
-// The board follows the topic: another topic opens its own board, anything else closes it.
-function syncBoard() {
-  if (!board.open || board.thread === state.thread) return
+// The panel follows the topic: another topic opens the same tool there (a project tool at that
+// topic's page), anything else closes it. An overview stays until another topic is picked.
+function syncTool() {
+  if (!panel.tool || panel.thread === state.thread) return
+  if (panel.thread == null && panel.page === OVERVIEW_PAGE && panel.from === state.thread) return
   const t = state.threads.find(x => x.id === state.thread)
-  if (t && !state.blank && !(panes.open && wide.matches)) openBoard(t.id)
-  else closeBoard()
+  if (t && !state.blank && !(panes.open && wide.matches) && toolById(panel.tool)) openTool(panel.tool, t.id)
+  else closeTool()
 }
 // On the phone it's a full-screen sheet: the app behind it is inert.
-function syncBoardModal() {
-  const modal = board.open && !wide.matches
+function syncToolModal() {
+  const modal = !!panel.tool && !wide.matches
   $('app').inert = modal
   $('side').inert = modal
 }
-wide.addEventListener('change', syncBoardModal)
-function renderBoardHead(note) {
-  const t = state.threads.find(x => x.id === board.thread)
-  $('board-title').textContent = t ? `${S.board} · ${t.title}` : S.board
-  const st = board.status
-  $('board-status').textContent = note ?? (!board.ready ? S.boardConnecting : st ? [st.drawing ? S.boardDrawing : null, S.boardThreads(st.openThreads ?? 0)].filter(Boolean).join(' · ') : '')
-  $('board-status').classList.toggle('drawing', !!st?.drawing)
-  $('board-open').href = board.link ?? '#'
+wide.addEventListener('change', syncToolModal)
+function renderToolHead(note) {
+  const tool = toolById(panel.tool)
+  const name = tool?.name ?? ''
+  const t = state.threads.find(x => x.id === panel.thread)
+  // A project tool's overview is named by its project, also when opened from the overview's own topic.
+  const proj = panel.project ?? (t?.project ? projectKey(t.project) : null)
+  $('tool-title').textContent = panel.page === OVERVIEW_PAGE && proj ? `${name} · ${S.projectName(proj)}` : t ? `${name} · ${t.title}` : name
+  $('tool-status').textContent = note ?? (!panel.ready ? S.toolConnecting : panel.status?.text ?? '')
+  $('tool-status').classList.toggle('busy', !!panel.status?.busy)
+  $('tool-open').href = panel.link ?? '#'
+  $('tool-close').setAttribute('aria-label', S.toolClose(name))
 }
-$('board-open').textContent = S.boardOpen
-$('board-close').setAttribute('aria-label', S.boardClose)
-$('board-close').onclick = closeBoard
-addEventListener('keydown', e => { if (e.key === 'Escape' && board.open && !wide.matches) closeBoard() })
-function boardPost(win, msg) { win.postMessage({ ...BOARD_PROTOCOL, ...msg }, board.origin) }
+$('tool-open').textContent = S.toolOpen
+$('tool-close').onclick = closeTool
+addEventListener('keydown', e => { if (e.key === 'Escape' && panel.tool && !wide.matches) closeTool() })
+
 addEventListener('message', e => {
-  const frame = board.frame
-  if (!frame || e.origin !== board.origin || e.source !== frame.contentWindow) return
+  const frame = panel.frame
+  if (!frame || e.origin !== panel.origin || e.source !== frame.contentWindow) return
   const d = e.data
-  if (!d || d.protocol !== 'board-host' || d.v !== 1) return
+  if (!d || typeof d !== 'object' || d.v !== 1 || typeof d.type !== 'string') return
+  if (d.protocol === 'bebop-tool') onToolMessage(e.source, d)
+  else if (d.protocol === 'board-host' && panel.tool === 'board') onBoardHost(e.source, d)
+})
+// The page a tool opened at, for its init: the id it posts back as ref.page, and a title to name it by.
+function toolPage() {
+  if (panel.page === OVERVIEW_PAGE && panel.thread == null) return { id: OVERVIEW_PAGE, title: S.overviewPage }
+  const t = state.threads.find(x => x.id === panel.thread)
+  return { id: panel.page, title: panel.page === OVERVIEW_PAGE ? S.overviewPage : t?.title ?? panel.page }
+}
+function toolSend(win, protocol, msg) { win.postMessage({ protocol, v: 1, ...msg }, panel.origin) }
+// The ack must reach the tool within 10 s; a post that takes longer is reported as failed.
+// The ack goes back once the post is in the topic (or refused): a queued post waits for its turn first.
+function ackedPost(post, ack) {
+  const tool = toolById(panel.tool), thread = panel.thread, instance = panel.instance
+  postToolEvent(tool, thread, instance, post).then(() => ack(true), err => ack(false, String(err?.message ?? err).slice(0, 200)))
+}
+
+function onToolMessage(win, d) {
+  const P = 'bebop-tool'
   if (d.type === 'hello') {
     if (!Array.isArray(d.versions) || !d.versions.includes(1)) return
-    boardPost(e.source, { type: 'init', deliver: [board.answerer], defaultAnswerer: board.answerer, user: { name: board.user } })
+    // A project tool's page, and its title at the top level too (Board names its page from it).
+    const page = panel.page != null ? toolPage() : null
+    toolSend(win, P, { type: 'init', instance: panel.instance, ...(page ? { page, title: page.title } : {}), agent: { ...tools.agent }, user: { name: tools.user } })
   } else if (d.type === 'ready') {
-    board.ready = true
-    if (typeof d.link === 'string' && /^https?:\/\//.test(d.link)) board.link = d.link
-    renderBoardHead()
+    panel.ready = true
+    const link = typeof d.link === 'string' && httpUrlOn(d.link, panel.origin)
+    if (link) panel.link = link
+    renderToolHead()
   } else if (d.type === 'status') {
-    board.ready = true
-    board.status = { drawing: !!d.drawing, openThreads: Number(d.openThreads) || 0 }
-    renderBoardHead()
-  } else if (d.type === 'comment' && typeof d.id === 'string') {
-    const win = e.source, thread = board.thread
-    const ack = (ok, error) => boardPost(win, { type: 'comment-ack', id: d.id, ok, ...(error ? { error } : {}) })
-    // The ack must reach Board within 10 s; a post that takes longer is reported as failed.
-    const late = new Promise((_, no) => setTimeout(() => no(new Error('timed out')), BOARD_ACK_MS))
-    Promise.race([postBoardComment(d.context, thread), late])
-      .then(() => ack(true), err => ack(false, String(err?.message ?? err)))
+    panel.ready = true
+    panel.status = { text: typeof d.text === 'string' ? d.text.replace(/\s+/g, ' ').trim().slice(0, 80) : '', busy: d.busy === true }
+    renderToolHead()
+  } else if (d.type === 'post' && typeof d.id === 'string' && d.id.length <= 100) {
+    ackedPost(d, (ok, error) => toolSend(win, P, { type: 'post-ack', id: d.id, ok, ...(error ? { error } : {}) }))
   }
-})
+}
+
+// Board's host bridge v1 (docs/host-bridge.md in Board), mapped onto the generic post.
+function onBoardHost(win, d) {
+  const P = 'board-host'
+  if (d.type === 'hello') {
+    if (!Array.isArray(d.versions) || !d.versions.includes(1)) return
+    toolSend(win, P, { type: 'init', deliver: [tools.agent.id], defaultAnswerer: tools.agent.id, user: { name: tools.user } })
+  } else if (d.type === 'ready') {
+    onToolMessage(win, { type: 'ready', link: d.link })
+  } else if (d.type === 'status') {
+    const n = Number(d.openThreads) || 0
+    panel.ready = true
+    panel.status = { text: [d.drawing ? S.boardDrawing : null, S.boardThreads(n)].filter(Boolean).join(' · '), busy: !!d.drawing }
+    renderToolHead()
+  } else if (d.type === 'comment' && typeof d.id === 'string') {
+    const ack = (ok, error) => toolSend(win, P, { type: 'comment-ack', id: d.id, ok, ...(error ? { error } : {}) })
+    const ctx = d.context
+    if (!ctx || typeof ctx !== 'object' || ctx.boardId !== panel.instance) return ack(false, 'not this board')
+    const { snapshot, ...rest } = ctx
+    const files = [...(snapshot ? [{ name: 'board-snapshot.png', mime: 'image/png', data: snapshot }] : []), { name: 'board-context.json', mime: 'application/json', data: rest }]
+    const text = String(ctx.text ?? '').trim()
+    ackedPost({ text: Number.isInteger(ctx.threadNumber) ? `#${ctx.threadNumber}: ${text}` : text, link: ctx.link, files,
+      ref: { thread: ctx.threadId, number: ctx.threadNumber }, key: ctx.commentId }, ack)
+  }
+}
+
+// Posting limits per tool: one every 2 s (sooner ones queue, up to 5), 20 a minute at most (web/limits.js).
+const toolLimits = postLimiter({ gapMs: 2000, perMin: 20, queueMax: 5 })
 function dataUrlBlob(url) {
   const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(url ?? '')
   if (!m) return null
   const bytes = m[2] ? Uint8Array.from(atob(m[3]), c => c.charCodeAt(0)) : new TextEncoder().encode(decodeURIComponent(m[3]))
   return new Blob([bytes], { type: m[1] })
 }
-async function postBoardComment(ctx, thread) {
-  if (!ctx || typeof ctx !== 'object' || !thread) throw new Error('no context')
-  if (ctx.boardId !== board.id) throw new Error('not this board')
-  const { snapshot, ...rest } = ctx
-  const fd = new FormData()
-  const png = snapshot ? dataUrlBlob(snapshot) : null
-  if (png) fd.append('file', png, 'board-snapshot.png')
-  fd.append('file', new Blob([JSON.stringify(rest, null, 2)], { type: 'application/json' }), 'board-context.json')
-  const up = await fetch('api/upload', { method: 'POST', body: fd })
-  if (up.status === 401) showLock()
-  if (up.status !== 201) throw new Error(`upload failed (HTTP ${up.status})`)
-  const files = (await up.json()).map(f => f.id)
-  const link = typeof ctx.link === 'string' && /^https?:\/\//.test(ctx.link) ? ctx.link : board.link
-  const text = `${S.boardPost(ctx.threadNumber, String(ctx.text ?? '').trim())}\n\n${link}`
+function toolFile(f, i, tool) {
+  const mime = String(f?.mime ?? '')
+  if (!TOOL_MIMES.has(mime)) throw new Error(`file type not allowed: ${mime.slice(0, 40)}`)
+  let blob = null
+  if (typeof f.data === 'string' && f.data.startsWith('data:')) blob = dataUrlBlob(f.data)
+  else if (mime === 'application/json') blob = new Blob([typeof f.data === 'string' ? f.data : JSON.stringify(f.data, null, 2)])
+  else if (mime === 'text/plain' && typeof f.data === 'string') blob = new Blob([f.data])
+  if (!blob || (blob.type && blob.type !== mime)) throw new Error('bad file data')
+  const name = (typeof f.name === 'string' ? f.name.replace(/[^\w.\- ]+/g, '_').replace(/^\.+/, '').slice(0, 100) : '') || `${tool.id}-${i + 1}${TOOL_EXT[mime]}`
+  return { blob: new Blob([blob], { type: mime }), name }
+}
+// The message's client_id makes a resent post a no-op; hashed, so a long instance or key can't be cut into a collision.
+async function toolClientId(id, instance, key) {
+  const k = `${instance}:${typeof key === 'string' && key ? key.slice(0, 200) : crypto.randomUUID()}`
+  try {
+    const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(k)))
+    return `tool:${id}:${[...hash.slice(0, 20)].map(b => b.toString(16).padStart(2, '0')).join('')}`
+  } catch { return `tool:${id}:${k}`.slice(0, 64) }
+}
+async function postToolEvent(tool, thread, instance, p) {
+  // A project tool's post may come from its overview, with no topic: the hub puts it where its page says.
+  if (!tool || !instance || (!thread && tool.scope !== 'project')) throw new Error('no topic')
+  const given = Array.isArray(p.files) ? p.files : []
+  if (given.length > TOOL_FILES_MAX) throw new Error(`at most ${TOOL_FILES_MAX} files`)
+  const files = given.map((f, i) => toolFile(f, i, tool))
+  if (files.reduce((n, f) => n + f.blob.size, 0) > TOOL_BYTES_MAX) throw new Error('files too large (10 MB in all)')
+  const text = typeof p.text === 'string' ? p.text.trim().slice(0, 4000) : ''
+  if (!text && !files.length) throw new Error('empty post')
+  // Checked first, then in line: a post within 2 s of the last waits here, and is timed from when it leaves.
+  await toolLimits.slot(tool.id)
+  let late
+  const deadline = new Promise((_, no) => { late = setTimeout(() => no(new Error('timed out')), TOOL_ACK_MS) })
+  try { await Promise.race([sendToolPost(tool, thread, instance, p, files, text), deadline]) } finally { clearTimeout(late) }
+}
+async function sendToolPost(tool, thread, instance, p, files, text) {
+  let ids = []
+  if (files.length) {
+    const fd = new FormData()
+    for (const f of files) fd.append('file', f.blob, f.name)
+    const up = await fetch('api/upload', { method: 'POST', body: fd })
+    if (up.status === 401) showLock()
+    if (up.status !== 201) throw new Error(`upload failed (HTTP ${up.status})`)
+    ids = (await up.json()).map(f => f.id)
+  }
+  const link = (typeof p.link === 'string' && httpUrlOn(p.link, tool.origin)) || (panel.instance === instance ? panel.link : null)
+  const ref = p.ref && typeof p.ref === 'object' && !Array.isArray(p.ref) ? p.ref : {}
   const res = await api('api/messages', { method: 'POST', body: JSON.stringify({
-    kind: 'text', thread, text, files,
-    board: { id: ctx.boardId, thread: ctx.threadId, number: ctx.threadNumber, link },
-    client_id: `board:${ctx.boardId}:${ctx.commentId ?? crypto.randomUUID()}`.slice(0, 64),
+    kind: 'text', thread, text: `${S.toolPost(tool.name, text)}${link ? `\n\n${link}` : ''}`, files: ids,
+    tool: { id: tool.id, instance, ref, ...(link ? { link } : {}) },
+    client_id: await toolClientId(tool.id, instance, p.key),
   }) })
   if (res?.id) upsert(res)
 }

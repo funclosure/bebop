@@ -11,9 +11,12 @@ import { boundaryOf, streamMultipart } from './multipart'
 import { loadVapid, sendPushToAll, type PushPayload } from './push'
 import { iconResolver, type IconSource } from './icons'
 import { homedir } from 'os'
-import { herdrProvider, rexProvider, combinedProvider, createPaneWatcher, PaneError, stripAnsi, PANE_KEYS, PANE_MAX_KEYS, PANE_PROMPT_MAX, PANE_TEXT_BAD, type PaneProvider } from './panes'
+import { findTranscript, readTranscript } from './transcript'
+import { createShells, loadShellsConfig, riskOf, ShellError, type Shells, type ShellBackend } from './shells'
+import { herdrProvider, rexProvider, rexShellBackend, herdrShellBackend, combinedProvider, createPaneWatcher, PaneError, stripAnsi, PANE_KEYS, PANE_MAX_KEYS, PANE_PROMPT_MAX, PANE_TEXT_BAD, type PaneProvider, type Pane } from './panes'
 import { runTranscriber } from './transcribe'
 import { createLock, type LockOptions } from './lock'
+import { loadTools, boardShim, instanceIdFor, toolUrls, OVERVIEW_PAGE, DESK, toolInstructions, superviseTools, type Tool, type SuperviseOptions } from './tools'
 
 export type HubOptions = {
   dataDir: string
@@ -38,19 +41,35 @@ export type HubOptions = {
   herdrSocket?: string
   /** Path to the Rex CLI: its agent sessions join herdr's (or stand alone). */
   rexBin?: string
-  /** Origin of a Board (tldraw whiteboard) server: turns on a board per topic (docs/host-bridge.md in Board). */
+  /** The tools file (see tools.ts; default <dataDir>/tools.json). */
+  toolsFile?: string
+  /** The origins the app is reached at from outside (HUB_PUBLIC_ORIGIN, e.g. the tailscale serve URL). Given to tools as BEBOP_HUB_ORIGIN; no tool may use one. */
+  publicOrigins?: string[]
+  /** Tests: the run:true supervisor's timing (see superviseTools). */
+  toolRun?: Partial<Pick<SuperviseOptions, 'minBackoffMs' | 'maxBackoffMs' | 'resetAfterMs' | 'healthStartMs' | 'healthEveryMs' | 'killAfterMs' | 'baseEnv'>>
+  /** Compat (HUB_BOARD_ORIGIN): a Board server that speaks board-host v1, loaded as a built-in "board" tool. */
   boardOrigin?: string
-  /** The user's name, for places that show it to others (a board's comments). */
+  /** The agent's id, given to tools (Board's answerer; default the agent name in lowercase). */
+  agentId?: string
+  /** The user's name, for places that show it to others (a tool's posts, a board's comments). */
   userName?: string
-  /** Board's answerer id for the agent (default: the agent name, lowercased, e.g. "my companion" → "my-companion"). */
-  boardAnswerer?: string
-  /** Folders a peer's `path` may be inside for its icon to be read (default: the home folder). */
+  /** Folders a peer's `path` may be inside for its icon to be read (default the home folder; HUB_ICON_ROOTS). Terminals open only inside them too. */
   iconRoots?: string[]
   /** Tests: replaces the default icon sources. */
   iconSources?: IconSource[]
   /** Tests: a pane provider in place of herdr, and the watcher's timing. */
   paneProvider?: PaneProvider
   paneTiming?: { fastMs?: number; slowMs?: number; pushGapMs?: number; now?: () => number }
+  /** HUB_SHELLS: plain shells on demand in any project's folder, and terminals shared from the app
+   *  (hub/shells.ts). `on` opens new ones in Rex if there is one, else herdr; `rex` / `herdr` picks. */
+  shells?: 'on' | 'rex' | 'herdr' | false
+  /** Optional, default <dataDir>/shells.json: `{ "projects": { "<key>": "<folder>" }, "deny": ["<key>"] }`. */
+  shellsFile?: string
+  /** Tests: the multiplexers' side of shells (the first opens new ones), and the lock checks they use. */
+  shellBackends?: ShellBackend[]
+  shellAuth?: { lockOn(): boolean; steppedUp(req: Request): boolean }
+  /** Claude Code's config folder, for a session's transcript (default $CLAUDE_CONFIG_DIR or ~/.claude). */
+  claudeDir?: string
   /** Passkey lock timing and relying party (see lock.ts). */
   lock?: LockOptions
   /** Tests: replaces Web Push delivery. */
@@ -108,18 +127,7 @@ const safeExt = (name: string) => {
 }
 const newId = () => randomBytes(12).toString('base64url')
 
-// A topic's board id: the thread id made readable for a URL ([A-Za-z0-9_-]{6,64}, as Board wants).
-export const BOARD_ID = /^[A-Za-z0-9_-]{6,64}$/
-export function boardIdFor(thread: string, n = 1): string {
-  const suffix = n > 1 ? `-${n}` : ''
-  let base = thread.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
-  if (base.length < 6) base = base ? `${base}-board` : 'board'
-  if (base.length < 6) base = base.padEnd(6, '-')
-  return base.slice(0, 64 - suffix.length) + suffix
-}
-// Board's answerer id for the agent: its name made into an id ("My Companion" → "my-companion").
-export const answererIdFor = (name: string) => name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent'
-const boardOriginOf = (s?: string) => { try { return s ? new URL(s).origin : null } catch { return null } }
+const TOOL_REF_TEXT_MAX = 200
 
 const snippet = (s: unknown, n: number) => (typeof s === 'string' ? s : '').replace(/\s+/g, ' ').trim().slice(0, n)
 
@@ -135,9 +143,26 @@ export function createHub(opts: HubOptions) {
   const allowed = (opts.allowedLogins ?? []).filter(Boolean)
   const maxUpload = (opts.maxUploadMB ?? 2048) * 1024 * 1024
   const webDir = opts.webDir ?? join(import.meta.dir, '..', 'web')
-  const boardOrigin = boardOriginOf(opts.boardOrigin)
-  const boardAnswerer = answererIdFor(opts.boardAnswerer || agentName)
-  if (opts.boardOrigin && !boardOrigin) log(`hub: HUB_BOARD_ORIGIN is not a URL: ${opts.boardOrigin}; boards are off`)
+  const agentId = (opts.agentId ?? agentName).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'agent'
+
+  // ---------- tools (see tools.ts): loaded once at start; the hub never installs one ----------
+  const port = opts.port ?? 8787
+  const publicOrigins = (opts.publicOrigins ?? []).map(o => { try { return new URL(o).origin } catch { return null } }).filter((o): o is string => !!o && o !== 'null')
+  const hubOrigins = [...publicOrigins, ...(port ? [`http://127.0.0.1:${port}`, `http://localhost:${port}`] : [])]
+  const tools = new Map<string, Tool>()
+  for (const t of loadTools(opts.toolsFile ?? join(dataDir, 'tools.json'), { hubOrigins, log })) tools.set(t.id, t)
+  if (opts.boardOrigin) {
+    if (tools.has('board')) log('hub: HUB_BOARD_ORIGIN ignored: tools.json lists a "board" tool')
+    else {
+      try {
+        tools.set('board', boardShim(opts.boardOrigin, hubOrigins))
+        log('hub: HUB_BOARD_ORIGIN is deprecated: list Board in tools.json instead (see README, Tools)')
+      } catch (e) { log(`hub: HUB_BOARD_ORIGIN ${opts.boardOrigin}: ${(e as Error).message}; boards are off`) }
+    }
+  }
+
+  // run: true → the hub starts and watches the tool's server (started once the hub listens).
+  let supervisor: ReturnType<typeof superviseTools> | null = null
 
   const tokenFile = join(dataDir, 'agent.token')
   if (!existsSync(tokenFile)) writeFileSync(tokenFile, randomBytes(32).toString('hex') + '\n', { mode: 0o600 })
@@ -368,9 +393,11 @@ export function createHub(opts: HubOptions) {
       // Dictated: the text came from a voice note (one of the files) and may be refined.
       if (b.dictation && typeof b.dictation.file === 'string' && files.includes(b.dictation.file))
         body.dictation = { file: b.dictation.file, refined: !!b.dictation.refined }
-      // A comment from the topic's board: which board and comment thread, so the agent can answer there.
-      const board = boardRef(b.board)
-      if (board) body.board = board
+      // Posted from a tool beside the topic: which tool and instance, and the tool's own refs, so the agent can answer there.
+      // A project tool's post goes into the topic its page belongs to.
+      const placed = toolRef(b.tool, thread) ?? legacyBoardRef(b.board, thread)
+      if (placed && 'error' in placed) return err(400, placed.error)
+      if (placed) { body.tool = placed.ref; thread = placed.thread }
       const row = insert({ sender: 'user', kind: 'text', body, thread, reply_to, login, client_id })
       broadcastUser('message', present([row])[0])
       deliverToAgents(row)
@@ -429,24 +456,196 @@ export function createHub(opts: HubOptions) {
     return json(present([row])[0], 201)
   }
 
-  function boardRef(x: any) {
-    if (!x || typeof x !== 'object' || typeof x.id !== 'string' || !BOARD_ID.test(x.id)) return null
-    const out: { id: string; thread?: string; number?: number; link?: string } = { id: x.id }
-    if (typeof x.thread === 'string' && x.thread) out.thread = x.thread.slice(0, 200)
-    if (Number.isInteger(x.number) && x.number > 0) out.number = x.number
-    if (typeof x.link === 'string' && /^https?:\/\//.test(x.link)) out.link = x.link.slice(0, 500)
-    return out
+  // A tool's ref on a message: a loaded tool, the instance this topic (or project) has for it, and
+  // only the keys its manifest lists (strings or numbers). For a topic tool anything else is dropped
+  // and the message still goes. A project tool's post must name a page of its project ({error} if
+  // not): it goes into that page's topic.
+  type ToolRef = { id: string; instance: string; ref: Record<string, string | number>; link?: string }
+  type Placed = { ref: ToolRef; thread: string | null } | { error: string }
+  function toolRef(x: any, thread: string | null): Placed | null {
+    if (!x || typeof x !== 'object' || typeof x.id !== 'string' || typeof x.instance !== 'string') return null
+    const tool = tools.get(x.id)
+    if (!tool || !tool.pattern.test(x.instance)) return null
+    const given = x.ref && typeof x.ref === 'object' && !Array.isArray(x.ref) ? x.ref : {}
+    if (tool.scope === 'project') {
+      const inst = db.query(`SELECT scope_key FROM tool_instances WHERE tool = ? AND scope = 'project' AND instance = ?`).get(tool.id, x.instance) as { scope_key: string } | null
+      if (!inst) return { error: `not an instance of ${tool.id}` }
+      // A post without a page (an older tool) counts as from the topic it was sent in.
+      const page = typeof given.page === 'string' && given.page ? given.page.slice(0, 200) : thread
+      if (!page) return { error: 'page required' }
+      const to = pageThread(tool, inst.scope_key, page)
+      if (!to) return { error: 'page not in this project' }
+      thread = to
+      given.page = page
+    } else {
+      if (!thread) return null
+      // A tool posts only into its own topic.
+      const cur = db.query(`SELECT instance FROM tool_instances WHERE tool = ? AND scope = 'topic' AND scope_key = ?`).get(tool.id, thread) as { instance: string } | null
+      if (cur?.instance !== x.instance) return null
+    }
+    const ref: Record<string, string | number> = {}
+    for (const k of tool.ref) {
+      const v = given[k]
+      if (typeof v === 'string' && v) ref[k] = v.slice(0, TOOL_REF_TEXT_MAX)
+      else if (typeof v === 'number' && Number.isFinite(v)) ref[k] = v
+    }
+    const out: ToolRef = { id: tool.id, instance: x.instance, ref }
+    if (typeof x.link === 'string' && x.link.length <= 500) {
+      try { if (new URL(x.link).origin === tool.origin) out.link = x.link } catch {}
+    }
+    return { ref: out, thread }
+  }
+  // Compat: an app from before tools posts `board: {id, thread, number, link}`.
+  function legacyBoardRef(x: any, thread: string | null): Placed | null {
+    if (!x || typeof x !== 'object') return null
+    return toolRef({ id: 'board', instance: x.id, ref: { thread: x.thread, number: x.number }, link: x.link }, thread)
   }
 
-  // A topic's board: made the first time it's asked for, then kept, so the link stays the same.
-  function boardFor(thread: string): string {
-    const cur = db.query('SELECT board FROM boards WHERE thread = ?').get(thread) as { board: string } | null
-    if (cur) return cur.board
-    const taken = db.query('SELECT 1 FROM boards WHERE board = ?')
-    let n = 1, id = boardIdFor(thread)
-    while (taken.get(id)) id = boardIdFor(thread, ++n)
-    db.query('INSERT INTO boards (thread, board, created) VALUES (?, ?, ?)').run(thread, id, Date.now())
+  // ---------- tool instances and pages ----------
+  // A topic tool has an instance per topic; a project tool one per project key (the project name in
+  // lowercase, as the app's projectKey; topics with no project share "desk"), opened at a page.
+  /** A topic's project key: its project, a project conversation's id, or the project whose overview topic it is. */
+  function projectOf(thread: string): string | null {
+    const m = q.meta.get(thread) as { project: string | null } | null
+    if (m?.project) return m.project.toLowerCase()
+    if (thread.startsWith(PROJECT_THREAD)) return thread.slice(PROJECT_THREAD.length).split('~')[0].toLowerCase() || null
+    const o = db.query(`SELECT scope_key FROM tool_pages WHERE page = ? AND thread = ? AND scope_key != ? LIMIT 1`).get(OVERVIEW_PAGE, thread, DESK) as { scope_key: string } | null
+    return o?.scope_key ?? null
+  }
+  const threadExists = (id: string) => !!(q.meta.get(id) || db.query('SELECT 1 FROM messages WHERE thread = ? LIMIT 1').get(id))
+
+  function newInstance(tool: Tool, scope: 'topic' | 'project', key: string): string | null {
+    const taken = db.query('SELECT 1 FROM tool_instances WHERE tool = ? AND instance = ?')
+    let n = 1, id = instanceIdFor(key, 1, tool.id)
+    while (taken.get(tool.id, id)) id = instanceIdFor(key, ++n, tool.id)
+    if (!tool.pattern.test(id)) { log(`hub: tools: ${tool.id}: its instance.pattern refuses ${id}`); return null }
+    db.query('INSERT INTO tool_instances (tool, scope, scope_key, instance, created) VALUES (?, ?, ?, ?, ?)').run(tool.id, scope, key, id, Date.now())
     return id
+  }
+  // A topic's instance of a tool: made the first time it's asked for, then kept, so the link stays the same.
+  function topicInstance(tool: Tool, thread: string): string | null {
+    const cur = db.query(`SELECT instance FROM tool_instances WHERE tool = ? AND scope = 'topic' AND scope_key = ?`).get(tool.id, thread) as { instance: string } | null
+    return cur ? cur.instance : newInstance(tool, 'topic', thread)
+  }
+  // A project's instance of a tool. A tool that was per topic before keeps its content: the first
+  // time the project asks, a topic instance of one of its topics (the asking one first, else the
+  // oldest) becomes the project's, and its topic becomes the project's overview topic.
+  function projectInstance(tool: Tool, key: string, from?: string): string | null {
+    const cur = db.query(`SELECT instance FROM tool_instances WHERE tool = ? AND scope = 'project' AND scope_key = ?`).get(tool.id, key) as { instance: string } | null
+    if (cur) return cur.instance
+    const old = db.query(`SELECT scope_key AS thread, instance FROM tool_instances WHERE tool = ? AND scope = 'topic' ORDER BY scope_key = ? DESC, created`).all(tool.id, from ?? null) as { thread: string; instance: string }[]
+    const adopt = old.find(r => (projectOf(r.thread) ?? DESK) === key)
+    if (adopt) {
+      db.transaction(() => {
+        db.query(`UPDATE tool_instances SET scope = 'project', scope_key = ? WHERE tool = ? AND instance = ?`).run(key, tool.id, adopt.instance)
+        db.query('INSERT OR REPLACE INTO tool_pages (tool, scope_key, page, thread, title, created) VALUES (?, ?, ?, ?, NULL, ?)').run(tool.id, key, OVERVIEW_PAGE, adopt.thread, Date.now())
+      })()
+      log(`hub: tools: ${tool.id}: ${adopt.thread}'s instance ${adopt.instance} is now project ${key}'s; that topic is its overview`)
+      return adopt.instance
+    }
+    return newInstance(tool, 'project', key)
+  }
+  /** Where a tool opens from a topic: its instance, and for a project tool the page. */
+  function openFromTopic(tool: Tool, thread: string): { instance: string; page: string } | null {
+    if (tool.scope === 'topic') { const instance = topicInstance(tool, thread); return instance ? { instance, page: thread } : null }
+    // A topic whose project the agent no longer lists keeps the board its page is on.
+    const was = db.query(`SELECT scope_key FROM tool_pages WHERE tool = ? AND thread = ? ORDER BY created LIMIT 1`).get(tool.id, thread) as { scope_key: string } | null
+    const key = projectOf(thread) ?? was?.scope_key ?? DESK
+    const instance = projectInstance(tool, key, thread)
+    if (!instance) return null
+    // The overview's topic shows the overview; any other topic its own page, named once and kept.
+    const had = db.query('SELECT page FROM tool_pages WHERE tool = ? AND scope_key = ? AND thread = ? ORDER BY page = ? DESC LIMIT 1').get(tool.id, key, thread, OVERVIEW_PAGE) as { page: string } | null
+    if (had) return { instance, page: had.page }
+    const page = pageIdFor(tool, key, thread)
+    db.query('INSERT INTO tool_pages (tool, scope_key, page, thread, title, created) VALUES (?, ?, ?, ?, NULL, ?)').run(tool.id, key, page, thread, Date.now())
+    return { instance, page }
+  }
+  /** A topic's page name: its thread id if that is [A-Za-z0-9_-]{1,64} (as Board takes), else made so; unique on the instance. */
+  function pageIdFor(tool: Tool, key: string, thread: string): string {
+    const base = thread.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'topic'
+    const taken = db.query('SELECT 1 FROM tool_pages WHERE tool = ? AND scope_key = ? AND page = ?')
+    let page = base === OVERVIEW_PAGE ? `${base}-2` : base, n = base === OVERVIEW_PAGE ? 2 : 1
+    while (taken.get(tool.id, key, page)) page = `${base.slice(0, 60)}-${++n}`
+    return page
+  }
+  /** A project's name for a title: as the agent wrote it, kebab-case made into words. */
+  function projectTitle(key: string): string {
+    if (key === DESK) return 'Desk'
+    const r = db.query('SELECT project FROM thread_meta WHERE lower(project) = ? LIMIT 1').get(key) as { project: string } | null
+    const name = r?.project ?? key
+    return /[A-Z]/.test(name) ? name : name.split(/[-_ ]+/).filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(' ')
+  }
+  /**
+   * The topic a project tool's page posts into, or null if the page isn't the project's: a topic
+   * of the project (now, or when it was opened there), or "overview": one topic per project and tool,
+   * "<Project> · <Tool>", made on the first post and then reused.
+   */
+  function pageThread(tool: Tool, key: string, page: string): string | null {
+    if (page === OVERVIEW_PAGE) {
+      const row = db.query('SELECT thread, title FROM tool_pages WHERE tool = ? AND scope_key = ? AND page = ?').get(tool.id, key, OVERVIEW_PAGE) as { thread: string | null; title: string | null } | null
+      if (row?.thread) return row.thread
+      const base = `${key}~${tool.id}`.slice(0, 200)
+      let id = base, n = 1
+      while (threadExists(id)) id = `${base}-${++n}`
+      const title = row?.title ?? `${projectTitle(key)} · ${tool.name}`
+      db.transaction(() => {
+        db.query('INSERT INTO tool_pages (tool, scope_key, page, thread, title, created) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET thread = excluded.thread, title = excluded.title')
+          .run(tool.id, key, OVERVIEW_PAGE, id, title, Date.now())
+        q.putTopic.run(id, title, null, null, null, key === DESK ? null : key, Date.now())
+      })()
+      log(`hub: tools: ${tool.id}: ${key}'s overview posts into ${id}`)
+      broadcastUser('threads', threads())
+      return id
+    }
+    const known = db.query('SELECT thread FROM tool_pages WHERE tool = ? AND scope_key = ? AND page = ? AND thread IS NOT NULL').get(tool.id, key, page) as { thread: string } | null
+    if (known) return known.thread
+    // A topic's id itself, if that topic is the project's (a page not opened through the hub yet).
+    return threadExists(page) && (projectOf(page) ?? DESK) === key ? page : null
+  }
+
+  const toolInfo = (t: Tool) => ({
+    id: t.id, name: t.name, version: t.version ?? null, icon: t.icon ? `api/tools/${t.id}/icon` : null, origin: t.origin, scope: t.scope,
+    frame: t.manifest.frame.url, link: t.manifest.frame.link ?? null, allow: t.allow, up: supervisor?.up(t.id) ?? null,
+  })
+
+  function openTool(req: Request, toolId: string, thread: string, legacy = false): Response {
+    // Cross-site forms can't set this header, and the hub answers no CORS preflight.
+    if (req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header required')
+    const tool = tools.get(toolId)
+    if (!tool) return err(404, legacy ? 'boards are off' : 'no such tool')
+    const at = openFromTopic(tool, thread)
+    const urls = at && toolUrls(tool, at.instance, at.page)
+    if (!at || !urls) return err(500, 'tool instance unavailable')
+    const out = { tool: tool.id, instance: at.instance, origin: tool.origin, frame: urls.frame, link: urls.link, scope: tool.scope, page: at.page }
+    return json(legacy ? { board: at.instance, ...out } : out)
+  }
+  // A project tool from the project's header: its overview page. `name` is the project's name as
+  // the app shows it, for the overview topic's title.
+  async function openProjectTool(req: Request, toolId: string, key: string): Promise<Response> {
+    if (req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header required')
+    const tool = tools.get(toolId)
+    if (!tool) return err(404, 'no such tool')
+    if (tool.scope !== 'project') return err(400, 'not a project tool')
+    const b = await req.json().catch(() => null) as { name?: unknown } | null
+    key = key.toLowerCase()
+    const instance = projectInstance(tool, key)
+    const urls = instance && toolUrls(tool, instance, OVERVIEW_PAGE)
+    if (!instance || !urls) return err(500, 'tool instance unavailable')
+    const name = typeof b?.name === 'string' ? b.name.replace(/\s+/g, ' ').trim().slice(0, 60) : ''
+    db.query('INSERT INTO tool_pages (tool, scope_key, page, thread, title, created) VALUES (?, ?, ?, NULL, ?, ?) ON CONFLICT DO UPDATE SET title = COALESCE(title, excluded.title)')
+      .run(tool.id, key, OVERVIEW_PAGE, name ? `${name} · ${tool.name}` : null, Date.now())
+    return json({ tool: tool.id, instance, origin: tool.origin, frame: urls.frame, link: urls.link, scope: tool.scope, page: OVERVIEW_PAGE, project: key })
+  }
+
+  function toolIcon(id: string): Response {
+    const t = tools.get(id)
+    if (!t?.icon) return err(404, 'not found')
+    const type = t.icon.endsWith('.svg') ? 'image/svg+xml' : t.icon.endsWith('.png') ? 'image/png' : 'image/webp'
+    return new Response(Bun.file(t.icon), { headers: {
+      'content-type': type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff',
+      // An SVG can carry script: never as this origin.
+      'content-security-policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+    } })
   }
 
   // ---------- voice transcription (optional, async) ----------
@@ -661,6 +860,13 @@ export function createHub(opts: HubOptions) {
     for (const t of map.values()) if (t.id.startsWith(PROJECT_THREAD)) {
       t.project ||= t.id.slice(PROJECT_THREAD.length).split('~')[0]
       if (t.title === t.id) t.title = firstLine(t.id) ?? t.title
+    }
+    // A project tool's overview topic: its project and title outlive the agent's thread lists.
+    for (const o of db.query('SELECT scope_key, thread, title FROM tool_pages WHERE page = ? AND thread IS NOT NULL').all(OVERVIEW_PAGE) as { scope_key: string; thread: string; title: string | null }[]) {
+      const t = map.get(o.thread)
+      if (!t) continue
+      if (o.scope_key !== DESK) t.project ||= o.scope_key
+      if (t.title === t.id && o.title) t.title = o.title
     }
     for (const t of map.values()) t.unread = (unreadQ.get(t.id, Math.max(all, lastRead(t.id))) as { n: number }).n
     const general = (unreadQ.get(null, Math.max(all, lastRead(''))) as { n: number }).n
@@ -1030,16 +1236,20 @@ export function createHub(opts: HubOptions) {
   // ---------- panes: agent sessions in a terminal multiplexer (off unless configured) ----------
   // Reads are cheap; every write re-reads the list first, so only a pane that is an agent
   // right now can be a target, and it is recorded in pane_actions.
+  let shells: Shells | null = null
+  /** Every pane id seen running an agent since the hub started (never offered as a terminal to share). */
+  const agentPanes = new Set<string>()
   const paneProviders = [
-    ...(opts.herdrBin ? [herdrProvider({ bin: opts.herdrBin, socket: opts.herdrSocket })] : []),
-    ...(opts.rexBin ? [rexProvider({ bin: opts.rexBin })] : []),
+    ...(opts.herdrBin ? [herdrProvider({ bin: opts.herdrBin, socket: opts.herdrSocket, shells: () => shells?.ids() ?? new Set() })] : []),
+    ...(opts.rexBin ? [rexProvider({ bin: opts.rexBin, shells: () => shells?.ids() ?? new Set() })] : []),
   ]
   const paneProvider = opts.paneProvider ?? (paneProviders.length ? combinedProvider(paneProviders) : null)
   const panes = paneProvider && createPaneWatcher({
     provider: paneProvider,
     watched: () => userClients.size > 0,
     onChange: (list, updated) => {
-      broadcastUser('panes', { panes: list, updated: new Date(updated).toISOString() })
+      for (const p of list) if (p.agent !== 'shell') agentPanes.add(p.id)
+      broadcastUser('panes', { panes: withShellModes(list), updated: new Date(updated).toISOString() })
       noteProjects(list.map(p => ({ project: p.project, path: p.cwd }))).catch(() => {})
     },
     onBlocked: p => sendPush({ title: p.title, body: 'Waiting for you', thread: null, id: null, tag: `pane:${p.id}`, pane: p.id, url: `/?pane=${encodeURIComponent(p.id)}` }),
@@ -1048,6 +1258,81 @@ export function createHub(opts: HubOptions) {
   })
   panes?.start()
   const paneNow = opts.paneTiming?.now ?? Date.now
+  // Shells (off unless HUB_SHELLS is set and there is a multiplexer to open them in).
+  const shellAuth = opts.shellAuth ?? { lockOn: () => lock.enabled(), steppedUp: (r: Request) => lock.steppedUp(r) }
+  let shellTimer: ReturnType<typeof setInterval> | undefined
+  if (opts.shells && panes) {
+    const roots = opts.iconRoots ?? [homedir()]
+    const cfg = loadShellsConfig(opts.shellsFile ?? join(dataDir, 'shells.json'), roots)
+    for (const e of cfg.errors) log(`hub: ${e}`)
+    const rex = opts.rexBin ? rexShellBackend({ bin: opts.rexBin }) : null
+    const herdr = opts.herdrBin ? herdrShellBackend({ bin: opts.herdrBin, socket: opts.herdrSocket }) : null
+    const backends = opts.shellBackends ?? (opts.shells === 'herdr' ? [herdr, rex] : [rex, herdr]).filter((b): b is ShellBackend => !!b)
+    if (!backends.length || (opts.shells === 'rex' && !rex) || (opts.shells === 'herdr' && !herdr)) log(`hub: HUB_SHELLS=${opts.shells}, but there is no multiplexer to open shells in`)
+    else {
+      const projectPath = db.query('SELECT path FROM projects WHERE lower(name) = ? AND path IS NOT NULL')
+      // A project's folder: shells.json first, else what the hub learnt from topics, sessions and icons.
+      const folderOf = (key: string) => cfg.deny.has(key) ? null
+        : cfg.folders.get(key) ?? (projectPath.get(key) as { path: string } | null)?.path ?? icons.folder(key)
+      // Never offered for sharing: a pane the hub has seen running an agent, or named after one.
+      const sh = createShells({ db, backends, folderOf, roots, log, now: opts.paneTiming?.now, share: cfg.share, denied: k => cfg.deny.has(k),
+        neverShare: s => agentPanes.has(s.id) || /\b(claude|codex|gemini|opencode|aider)\b/i.test(s.title) })
+      shells = sh
+      sh.onChange(() => { panes.refresh().catch(() => {}) })
+      sh.closeAll('hub restart').catch(() => {})
+      shellTimer = setInterval(() => sh.sweep().catch(() => {}), 60_000)
+      log(`hub: shells on (new ones in ${backends[0].name}; sharing ${cfg.share ? `on, from ${backends.map(b => b.name).join(' and ')}` : 'off'})`)
+    }
+  }
+  /** A shell pane says whether the hub opened it or the user shared it. */
+  const withShellModes = (list: Pane[]) => shells ? list.map(p => p.agent === 'shell' ? { ...p, shell: shells!.get(p.id)?.mode ?? 'opened' } : p) : list
+  const shellErr = (e: unknown) => e instanceof ShellError ? json({ error: e.message, code: e.code }, e.status) : paneErr(e)
+  const paneAction = (pane: string, title: string, action: string, payload: unknown, login: string) =>
+    db.query('INSERT INTO pane_actions (ts, pane, title, action, payload, login) VALUES (?, ?, ?, ?, ?, ?)').run(Date.now(), pane, title, action, JSON.stringify(payload), login)
+
+  async function shellsApi(req: Request, path: string, login: string): Promise<Response> {
+    if (req.method !== 'POST') return err(405, 'method not allowed')
+    if (!(req.headers.get('content-type') ?? '').startsWith('application/json') || req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header and a JSON body required')
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    const sh = shells!
+    try {
+      const m = /^\/api\/shells\/([^/]{1,100})\/(close|disarm)$/.exec(path)
+      if (!m && !shellAuth.lockOn()) throw new ShellError('lock_off', 403, 'turn the lock on first (Settings)')
+      if (path === '/api/shells') {
+        // From a session's screen: a shell in that session's folder.
+        let at: string | null = null
+        if (b?.pane != null) {
+          const p = await paneById(String(b.pane))
+          if (!p || p.agent === 'shell') throw new ShellError('no_folder', 404, 'no such session')
+          at = p.cwd ?? ''
+        }
+        const r = await sh.open(String(b?.project ?? ''), login, shellAuth.steppedUp(req), at)
+        if (!r.reused) paneAction(r.id, 'Shell', 'shell-open', b?.pane != null ? { pane: b.pane, cwd: at } : { project: b.project }, login)
+        return json(r)
+      }
+      // The user's own terminals that could be shown (needs a fresh Face ID: it lists what's open).
+      if (path === '/api/shells/shareable') {
+        if (!shellAuth.steppedUp(req)) throw new ShellError('stepup', 403, 'stepup required')
+        return json({ terminals: (await sh.shareable()).map(t => ({ id: t.id, title: t.title, cwd: t.cwd, project: t.project, backend: t.backend })) })
+      }
+      if (path === '/api/shells/share') {
+        const id = String(b?.id ?? '')
+        const r = await sh.share(id, login, shellAuth.steppedUp(req))
+        if (!r.reused) paneAction(id, 'Shared terminal', 'shell-share', {}, login)
+        return json(r)
+      }
+      if (!m) return err(404, 'not found')
+      const id = decodeURIComponent(m[1]), r = sh.get(id)
+      if (!r) return err(404, 'no such shell')
+      if (m[2] === 'disarm') { sh.disarm(id); return json({ ok: true }) }
+      await sh.close(id, r.mode === 'shared' ? 'stopped sharing in the app' : 'closed in the app')
+      paneAction(id, `Shell · ${r.project}`, r.mode === 'shared' ? 'shell-unshare' : 'shell-close', {}, login)
+      return json({ ok: true })
+    } catch (e) { return shellErr(e) }
+  }
+
+  const claudeDir = opts.claudeDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
 
   function paneErr(e: unknown): Response {
     if (!(e instanceof PaneError)) return err(502, String((e as Error)?.message ?? e))
@@ -1065,9 +1350,9 @@ export function createHub(opts: HubOptions) {
     if (req.method === 'GET' && path === '/api/panes') {
       try { await panes!.refresh() } catch (e) { return paneErr(e) }
       const cur = panes!.current()
-      return json({ panes: cur.panes, updated: new Date(cur.updated).toISOString() })
+      return json({ panes: withShellModes(cur.panes), updated: new Date(cur.updated).toISOString() })
     }
-    const m = /^\/api\/panes\/([^/]{1,100})\/(screen|keys|prompt|text)$/.exec(path)
+    const m = /^\/api\/panes\/([^/]{1,100})\/(screen|history|keys|prompt|text)$/.exec(path)
     if (!m) return err(404, 'not found')
     const id = decodeURIComponent(m[1]), what = m[2]
 
@@ -1087,23 +1372,53 @@ export function createHub(opts: HubOptions) {
       } catch (e) { return paneErr(e) }
     }
 
+    // Earlier turns of a Claude Code session, from its transcript, a page at a time going back.
+    // `before` is the `next` of the page after; it only counts for the same `session`.
+    if (what === 'history') {
+      if (req.method !== 'GET') return err(405, 'method not allowed')
+      try {
+        const p = await paneById(id)
+        if (!p) return err(404, 'pane not found')
+        const pid = p.agent === 'claude' && paneProvider!.agentPid ? await paneProvider!.agentPid(id).catch(() => null) : null
+        const t = p.agent === 'claude' ? findTranscript({ claudeDir, pid, cwd: pid == null ? p.cwd : null }) : null
+        if (!t) return json({ error: 'no transcript for this session', code: 'no_transcript' }, 404)
+        const raw = url.searchParams.get('before')
+        const before = raw != null && /^\d{1,15}$/.test(raw) && url.searchParams.get('session') === t.session ? Number(raw) : null
+        const page = readTranscript(t.path, { before, limit: Number(url.searchParams.get('limit')) || 20 })
+        return json({ id, session: t.session, ...page })
+      } catch (e) { return paneErr(e) }
+    }
+
     if (req.method !== 'POST') return err(405, 'method not allowed')
     // CSRF guard: a plain form or no-cors fetch can't set these, and the hub answers no CORS preflight.
     if (!(req.headers.get('content-type') ?? '').startsWith('application/json') || req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header and a JSON body required')
     let b: any
     try { b = await req.json() } catch { return err(400, 'invalid json') }
     let payload: string[] | string
+    // One of the hub's shells: one line at a time, Ctrl-C as a key, a confirm for risky commands,
+    // and a fresh Face ID after a pause (shells.checkWrite).
+    const shell = shells?.get(id) ?? null
     if (what === 'keys') {
       const keys = b?.keys
       if (!Array.isArray(keys) || !keys.length || keys.length > PANE_MAX_KEYS) return err(400, `keys: 1 to ${PANE_MAX_KEYS} keys`)
-      const bad = keys.find((k: unknown) => typeof k !== 'string' || !PANE_KEYS.has(k))
+      const bad = keys.find((k: unknown) => typeof k !== 'string' || !(PANE_KEYS.has(k) || (shell && k === 'ctrl+c')))
       if (bad !== undefined) return err(400, `key not allowed: ${String(bad).slice(0, 20)}`)
       payload = keys
     } else {
       const text = b?.text
       if (typeof text !== 'string' || !text.trim() || text.length > PANE_PROMPT_MAX) return err(400, `text: 1 to ${PANE_PROMPT_MAX} characters`)
       if (what === 'text' && PANE_TEXT_BAD.test(text)) return err(400, 'text: no control characters (send Enter as a key)')
+      if (shell && what === 'text') return err(400, 'a shell takes one command at a time')
+      if (shell && PANE_TEXT_BAD.test(text)) return err(400, 'one line: a shell takes one command at a time')
       payload = text
+    }
+    if (shell) {
+      try {
+        if (!shellAuth.lockOn()) throw new ShellError('lock_off', 403, 'turn the lock on first (Settings)')
+        await shells!.checkWrite(id, shellAuth.steppedUp(req))
+      } catch (e) { return shellErr(e) }
+      const risk = what === 'prompt' ? riskOf(payload as string) : null
+      if (risk && b?.confirm !== true) return json({ error: `this command ${risk}`, code: 'confirm', reason: risk }, 409)
     }
     try {
       const p = await paneById(id)
@@ -1132,10 +1447,12 @@ export function createHub(opts: HubOptions) {
   }
 
   // ---------- static ----------
+  // The app frames only its tools' origins, and nothing may frame the app.
+  const shellCsp = `frame-src 'self' ${[...new Set([...tools.values()].map(t => t.origin))].join(' ')}`.trim() + "; frame-ancestors 'none'"
   function serveStatic(path: string): Response | null {
     if (path === '/' || path === '/index.html') {
       const html = readFileSync(join(webDir, 'index.html'), 'utf8').replaceAll('{{NAME}}', escapeHtml(agentName))
-      return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
+      return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'content-security-policy': shellCsp } })
     }
     if (path === '/manifest.webmanifest') {
       return new Response(JSON.stringify({
@@ -1158,7 +1475,7 @@ export function createHub(opts: HubOptions) {
 
   // ---------- routing ----------
   const server = Bun.serve({
-    port: opts.port ?? 8787,
+    port,
     hostname: opts.hostname ?? '127.0.0.1',
     maxRequestBodySize: maxUpload + 1024 * 1024,
     idleTimeout: 120,
@@ -1200,6 +1517,12 @@ export function createHub(opts: HubOptions) {
         if (method === 'POST' && path === '/agent/presence') return agentPresence(req)
         if (method === 'POST' && path === '/agent/tasks') return agentTasks(req)
         if (method === 'GET' && path === '/agent/history') return agentHistory(url)
+        // Each tool's instructions for the agent, from its manifest (operator-installed, capped).
+        if (method === 'GET' && path === '/agent/tools') return json([...tools.values()].map(t => ({
+          id: t.id, name: t.name, origin: t.origin, scope: t.scope, ref: t.ref,
+          cli: t.manifest.agent?.cli && t.dir ? join(t.dir, t.manifest.agent.cli) : null,
+          instructions: toolInstructions(t),
+        })))
         const fm = /^\/agent\/file\/([\w-]+)$/.exec(path)
         if (method === 'GET' && fm) {
           const f = getFile(fm[1])
@@ -1225,8 +1548,15 @@ export function createHub(opts: HubOptions) {
         if (method === 'GET' && path === '/api/threads') return json(threads())
         if (method === 'GET' && path === '/api/search') return search(url)
         const ta = /^\/api\/threads\/([^/]{1,200})\/(archive|unarchive)$/.exec(path)
+        const tt = /^\/api\/threads\/([^/]{1,200})\/tools\/([a-z0-9]{1,16})$/.exec(path)
+        if (method === 'POST' && tt) return openTool(req, tt[2], decodeURIComponent(tt[1]))
+        const tp = /^\/api\/projects\/([^/]{1,100})\/tools\/([a-z0-9]{1,16})$/.exec(path)
+        if (method === 'POST' && tp) return openProjectTool(req, tp[2], decodeURIComponent(tp[1]))
+        // Compat, one release: the app from before tools asks for its board here.
         const tb = /^\/api\/threads\/([^/]{1,200})\/board$/.exec(path)
-        if (method === 'POST' && tb) return boardOrigin ? json({ board: boardFor(decodeURIComponent(tb[1])), origin: boardOrigin }) : err(404, 'boards are off')
+        if (method === 'POST' && tb) return openTool(req, 'board', decodeURIComponent(tb[1]), true)
+        const ti = /^\/api\/tools\/([a-z0-9]{1,16})\/icon$/.exec(path)
+        if (method === 'GET' && ti) return toolIcon(ti[1])
         if (method === 'POST' && ta) return json({ ok: true, thread: setThread(decodeURIComponent(ta[1]), { state: ta[2] === 'archive' ? 'archived' : null }) })
         if (method === 'GET' && path === '/api/commands') return json(commands())
         if (method === 'GET' && path === '/api/peers') return json(peers())
@@ -1242,7 +1572,8 @@ export function createHub(opts: HubOptions) {
           return json({ ok: true })
         }
         if (path === '/api/panes' || path.startsWith('/api/panes/')) return panes ? panesApi(req, url, login) : err(404, 'not found')
-        if (method === 'GET' && path === '/api/config') return json({ name: agentName, login, panes: !!panes, dictation: !!transcribeCmd, refine: !!refineCmd, board: boardOrigin, board_answerer: boardOrigin ? boardAnswerer : null, user_name: opts.userName ?? 'You' })
+        if (path === '/api/shells' || path.startsWith('/api/shells/')) return shells ? shellsApi(req, path, login) : err(404, 'not found')
+        if (method === 'GET' && path === '/api/config') return json({ name: agentName, login, panes: !!panes, dictation: !!transcribeCmd, refine: !!refineCmd, tools: [...tools.values()].map(toolInfo), agent_id: agentId, board: tools.get('board')?.origin ?? null, user_name: opts.userName ?? 'You', shells: !!shells, shell_share: !!shells?.shareOn })
         if (method === 'GET' && path === '/api/events') {
           return sseStream(server, req, c => {
             userClients.add(c)
@@ -1279,19 +1610,30 @@ export function createHub(opts: HubOptions) {
     },
   })
 
+  if ([...tools.values()].some(t => t.entry?.run)) {
+    supervisor = superviseTools([...tools.values()], {
+      ...opts.toolRun,
+      logsDir: join(dataDir, 'logs', 'tools'), log,
+      hubOrigins: [...new Set([...publicOrigins, `http://127.0.0.1:${server.port}`, `http://localhost:${server.port}`])],
+    })
+  }
+
   return {
     server,
     url: `http://${server.hostname}:${server.port}`,
     token: agentToken,
     db,
     vapid,
-    stop() {
+    /** Stops serving at once; the promise resolves once run:true tools have exited too. */
+    stop(): Promise<void> {
       clearTimeout(presenceTimer)
+      clearInterval(shellTimer) // open shells are closed at the next start
       panes?.stop()
       for (const c of userClients) c.close()
       for (const c of agentClients.keys()) c.close()
       server.stop(true)
       db.close()
+      return supervisor?.stop() ?? Promise.resolve()
     },
   }
 }

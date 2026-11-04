@@ -112,3 +112,15 @@ test('combined: lists are joined, actions go to the provider that listed the pan
   const all = combinedProvider([mk([], [], true), mk([], [], true)])
   expect(await all.list().catch(e => e.message)).toBe('down')
 })
+
+test('rex: agentPid is the foreground program of the block (its transcript is found by it)', async () => {
+  const f = fakeRex()
+  const p = rexProvider({ bin: '/opt/rex', run: f.run })
+  expect(await p.agentPid!(rexPaneId(S, B1))).toBe(7)
+  expect(f.calls.at(-1)).toEqual(['block', 'call', '-b', B1, 'process'])
+  const g = fakeRex({ [`block call -b ${B1} process`]: { stdout: '{}' } })
+  expect(await rexProvider({ bin: '/opt/rex', run: g.run }).agentPid!(rexPaneId(S, B1))).toBeNull()
+  const c = combinedProvider([rexProvider({ bin: '/opt/rex', run: f.run }), { list: async () => [], screen: async () => '', keys: async () => {}, prompt: async () => {}, text: async () => {} }])
+  await c.list()
+  expect(await c.agentPid!(rexPaneId(S, B1))).toBe(7)
+})

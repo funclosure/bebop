@@ -125,3 +125,10 @@ test('project conversation: thread id, the @peer prefix, and what the bubble sho
   expect(validPeer('Zoë')).toBe(false)
   expect(validPeer(null)).toBe(false)
 })
+
+test('layout: a plain shell (join: false) keeps its lines as printed', () => {
+  const screen = '[master][~/w/my-app]$ ls\nbun.lock     data         node_modules scripts      web\nchannel      examples     package.json SPEC.md\nCLAUDE.md    hub          README.md    test\n[master][~/w/my-app]$'
+  const texts = (r: any) => r.rows.map((x: any) => x.spans.map((s: any) => s.t).join(''))
+  expect(texts(layoutScreen(parseAnsi(screen), { join: false }))).toEqual(screen.split('\n'))
+  expect(texts(layoutScreen(parseAnsi(screen))).length).toBeLessThan(5) // the agent heuristic would join them
+})
