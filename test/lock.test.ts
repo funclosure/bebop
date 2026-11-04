@@ -145,3 +145,21 @@ test('passkeys: rename and remove need a fresh unlock; the last one stays', asyn
   expect((await last.json()).code).toBe('last_passkey')
   expect(names()).toEqual(['cred-1:null'])
 })
+
+test('passkeys: the user handle is this hub\'s own random id (never the login), the display name says which hub', async () => {
+  ctx = startHub({ agentName: 'Faye' })
+  const o = await (await ctx.user('/api/auth/register/options', { method: 'POST', body: '{}' })).json()
+  const id = Buffer.from(o.user.id, 'base64url')
+  expect(id.length).toBe(16)
+  expect(id.toString()).not.toContain('local')
+  expect(o.user.name).toBe('local')
+  expect(o.user.displayName).toBe('local (Faye)')
+  // Stable for this hub, different on another one.
+  const o2 = await (await ctx.user('/api/auth/register/options', { method: 'POST', body: '{}' })).json()
+  expect(o2.user.id).toBe(o.user.id)
+  const other = startHub()
+  try {
+    const o3 = await (await other.user('/api/auth/register/options', { method: 'POST', body: '{}' })).json()
+    expect(o3.user.id).not.toBe(o.user.id)
+  } finally { other.hub.stop() }
+})

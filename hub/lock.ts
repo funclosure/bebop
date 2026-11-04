@@ -58,6 +58,17 @@ export function createLock(db: Database, opts: LockOptions = {}) {
 
   const enabled = () => (q.count.get() as { n: number }).n > 0
 
+  // 16 random bytes made once per hub (kept with the passkeys), so its passkeys never share a
+  // user handle with another hub's.
+  db.exec('CREATE TABLE IF NOT EXISTS lock_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+  function hubUserId(): Uint8Array {
+    const row = db.query("SELECT value FROM lock_meta WHERE key = 'user_id'").get() as { value: string } | null
+    if (row) return new Uint8Array(Buffer.from(row.value, 'base64url'))
+    const id = randomBytes(16)
+    db.query("INSERT INTO lock_meta (key, value) VALUES ('user_id', ?)").run(id.toString('base64url'))
+    return new Uint8Array(id)
+  }
+
   function cookieToken(req: Request): string | null {
     const m = /(?:^|;\s*)hub_session=([A-Za-z0-9_-]{20,})/.exec(req.headers.get('cookie') ?? '')
     return m ? m[1] : null
@@ -145,8 +156,13 @@ export function createLock(db: Database, opts: LockOptions = {}) {
       const options = await generateRegistrationOptions({
         rpName: opts.rpName ?? 'Bebop',
         rpID,
+        // The user handle is this hub's own, never the login: two hubs on one host (say a test
+        // hub next to the main one) share the relying party, and a password manager keeps one
+        // passkey per relying party and user handle, so a shared handle made a new hub's
+        // passkey replace the other hub's. The display name says which hub it's for.
         userName: login,
-        userID: new TextEncoder().encode(login),
+        userDisplayName: `${login} (${opts.rpName ?? 'Bebop'})`,
+        userID: hubUserId(),
         attestationType: 'none',
         excludeCredentials: existing.map(p => ({ id: p.id, transports: p.transports ? JSON.parse(p.transports) : undefined })),
         authenticatorSelection: { residentKey: 'preferred', userVerification: 'required' },

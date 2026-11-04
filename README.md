@@ -116,6 +116,7 @@ The app can also be locked with a passkey (Face ID, Touch ID or the platform's o
 - **Idle lock.** The app locks again after 5 minutes away (no requests and no open event stream). "Lock now" locks it at once.
 - **Approvals.** Answering an approval card asks for the passkey again (step-up), even while unlocked.
 - **The relying party** is the host the app is opened on (for example `<machine>.<tailnet>.ts.net`), so a passkey only works on that hostname. Opening the hub under another name means registering a new passkey there.
+- **Two hubs on one machine** (say `https://<machine>…/` and `https://<machine>…:8443`) share that relying party, because the port doesn't count. Each hub gives its passkeys its own user handle and puts its name in the passkey's display name ("you@example.com (Sam)"), so your password manager keeps one passkey per hub. Hubs from before 2026-11-05 used the login as the handle, so a passkey made on one replaced the other's on every device synced with it (iCloud Keychain, for one). If that happened to you, see "Locked out?" below.
 
 **Locked out?** (a lost phone, a renamed machine). Recovery happens on the hub machine, against `data/hub.sqlite` (or `HUB_DATA_DIR`):
 

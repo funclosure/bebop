@@ -3554,16 +3554,16 @@ async function lockNow() {
   showLock()
 }
 /** Registers a passkey: the first one turns the lock on. Call it straight from a tap. */
-function registerPasskey(okText) {
+function registerPasskey(okText, attachment) {
   const o = fresh(lockState.regOpts)
   lockState.regOpts = null
   const failed = okText ? S.passkeyAddFailed : S.lockSetupFailed
   if (!o) { prefetchLock(); if (settingsSheet.open) renderSettings(); return toast(failed) }
   delete o.at
   // Adding "this device": ask for the device's own authenticator, or a browser offers a phone QR.
-  const authenticatorSelection = okText ? { ...o.authenticatorSelection, authenticatorAttachment: 'platform' } : o.authenticatorSelection
+  const authenticatorSelection = okText ? { ...o.authenticatorSelection, authenticatorAttachment: attachment ?? 'platform' } : o.authenticatorSelection
   navigator.credentials.create({ publicKey: { ...o, authenticatorSelection, challenge: b64ToBytes(o.challenge), user: { ...o.user, id: b64ToBytes(o.user.id) }, excludeCredentials: withIds(o.excludeCredentials) } })
-    .then(c => api('api/auth/register/verify', { method: 'POST', body: JSON.stringify({ response: credJSON(c), name: isIOS ? 'iPhone' : /Mac/.test(navigator.platform) ? 'Mac' : navigator.platform }) }))
+    .then(c => api('api/auth/register/verify', { method: 'POST', body: JSON.stringify({ response: credJSON(c), name: attachment === 'cross-platform' ? S.phoneName : isIOS ? 'iPhone' : /Mac/.test(navigator.platform) ? 'Mac' : navigator.platform }) }))
     .then(async r => { rememberPasskey(r?.id); await loadLock(); toast(okText ?? S.lockOn(lockState.idleMin), 5000); if (settingsSheet.open) renderSettings() },
       e => { prefetchLock(); toast(e?.name === 'InvalidStateError' ? S.passkeyExists : failed, 5000); if (settingsSheet.open) renderSettings() })
 }
@@ -3643,7 +3643,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v100'
+const APP_VERSION = 'v101'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
@@ -3727,6 +3727,9 @@ async function renderSettings() {
   if (lockState.enabled && window.PublicKeyCredential) {
     const ready = fresh(lockState.regOpts)
     lockRows.push(setRow(S.addPasskeyLabel, h('button', { type: 'button', class: 'set-btn', onclick: ready ? () => registerPasskey(S.passkeyAdded) : confirmAddPasskey }, ready ? S.addThisDevice : S.addPasskey), ready ? S.addThisDeviceHint : null))
+    // A phone that can't unlock (it lost its passkey): make one on it from here, with the
+    // browser's QR code (the phone scans it and saves the passkey).
+    if (ready) lockRows.push(setRow(S.addPhoneLabel, h('button', { type: 'button', class: 'set-btn plain', onclick: () => registerPasskey(S.passkeyAdded, 'cross-platform') }, S.addPhone), S.addPhoneHint))
   }
   const notifyRows = [setRow(S.notifications,
     ns === 'off' ? h('button', { type: 'button', class: 'set-btn', onclick: async () => { await turnOnNotifications(); renderSettings() } }, S.turnOn) : S.notifyStatus(ns))]
