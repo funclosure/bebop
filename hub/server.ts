@@ -7,6 +7,8 @@ import { open } from 'fs/promises'
 import { join, extname, basename, normalize, isAbsolute } from 'path'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { openDb, type MessageRow, type FileRow } from './db'
+import { markParams, markShapes, markSvg, hash } from '../web/mark.js'
+import { rasterize, encodePng } from './raster'
 import { boundaryOf, streamMultipart } from './multipart'
 import { loadVapid, sendPushToAll, type PushPayload } from './push'
 import { iconResolver, type IconSource } from './icons'
@@ -1513,11 +1515,55 @@ export function createHub(opts: HubOptions) {
   // ---------- static ----------
   // The app frames only its tools' origins, and nothing may frame the app.
   const shellCsp = `frame-src 'self' ${[...new Set([...tools.values()].map(t => t.origin))].join(' ')}`.trim() + "; frame-ancestors 'none'"
+  // ---------- the app's icon: the mark made from the agent's name and a seed (web/mark.js) ----------
+  // SVGs are drawn on each request; PNGs are drawn once per seed and kept in data/app-icons/.
+  // Changing the seed (Settings → Appearance) changes every icon; iOS keeps a Home Screen icon
+  // until the app is added again.
+  const ICON_FILES: Record<string, { kind: 'icon' | 'mark' | 'maskable'; size?: number }> = {
+    '/icons/icon.svg': { kind: 'icon' }, '/icons/mark.svg': { kind: 'mark' }, '/icons/maskable.svg': { kind: 'maskable' },
+    '/icons/icon-192.png': { kind: 'icon', size: 192 }, '/icons/icon-512.png': { kind: 'icon', size: 512 },
+    '/icons/maskable-512.png': { kind: 'maskable', size: 512 }, '/icons/apple-touch-icon-180.png': { kind: 'maskable', size: 180 },
+    '/icons/favicon-64.png': { kind: 'icon', size: 64 },
+  }
+  const iconSeed = () => Number((db.query("SELECT value FROM settings WHERE key = 'icon_seed'").get() as { value: string } | null)?.value ?? 0) || 0 // -1: the original mark
+  const iconDir = join(dataDir, 'app-icons')
+  function appIcon(path: string): Response | null {
+    const f = ICON_FILES[path]
+    if (!f) return null
+    const p = markParams(agentName, iconSeed())
+    const headers = { 'cache-control': 'no-cache' }
+    if (!f.size) return new Response(markSvg(p, f.kind), { headers: { ...headers, 'content-type': 'image/svg+xml' } })
+    const key = `${hash(agentName).toString(36)}-${iconSeed()}-${f.kind}-${f.size}.png`
+    const file = join(iconDir, key)
+    if (!existsSync(file)) {
+      mkdirSync(iconDir, { recursive: true })
+      // An iOS Home Screen icon is square (iOS rounds it): the apple-touch one is full-bleed.
+      writeFileSync(file, encodePng(rasterize(markShapes(p, f.kind), f.size), f.size, f.size))
+    }
+    return new Response(Bun.file(file), { headers: { ...headers, 'content-type': 'image/png' } })
+  }
+  function setIconSeed(seed: number) {
+    db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('icon_seed', ?)").run(String(seed))
+    broadcastUser('icon', { seed })
+  }
+  async function iconApi(req: Request): Promise<Response> {
+    if (req.method === 'GET') return json({ name: agentName, seed: iconSeed() })
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    const seed = b?.seed
+    if (!Number.isInteger(seed) || seed < -1 || seed > 99999) return err(400, 'seed: a whole number from 0 to 99999, or -1 for the original mark')
+    setIconSeed(seed)
+    log(`hub: icon seed ${seed}`)
+    return json({ ok: true, seed })
+  }
+
   function serveStatic(path: string): Response | null {
     if (path === '/' || path === '/index.html') {
       const html = readFileSync(join(webDir, 'index.html'), 'utf8').replaceAll('{{NAME}}', escapeHtml(agentName))
       return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'content-security-policy': shellCsp } })
     }
+    const icon = appIcon(path)
+    if (icon) return icon
     if (path === '/manifest.webmanifest') {
       return new Response(JSON.stringify({
         name: agentName, short_name: agentName, start_url: './', scope: './', display: 'standalone',
@@ -1560,6 +1606,7 @@ export function createHub(opts: HubOptions) {
             for (const r of q.undelivered.all() as MessageRow[]) { sent.add(r.id); if (!handed.has(r.id)) c.send('message', forAgent(r), r.id) }
           }, c => { if (agentClients.delete(c)) listeningChanged() })
         }
+        if (path === '/agent/icon' && (method === 'GET' || method === 'POST')) return iconApi(req)
         if (method === 'GET' && path === '/agent/version') return json({ commit: codeVersion, started: hubStarted })
         // A health check (channel/check.ts): a probe goes to every open agent stream and is
         // neither stored nor shown in the app. The watcher ignores it (it isn't a message).
@@ -1659,6 +1706,10 @@ export function createHub(opts: HubOptions) {
         if (method === 'GET' && ic) return iconFile(ic[1])
         if (method === 'GET' && path === '/api/presence') return json(presence)
         if (method === 'GET' && path === '/api/listening') return json(listening())
+        if (path === '/api/icon') {
+          if (method === 'POST' && req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header required')
+          if (method === 'GET' || method === 'POST') return iconApi(req)
+        }
         if (method === 'GET' && path === '/api/tasks') return json(tasks())
         if (method === 'POST' && path === '/api/read') {
           const b = await req.json().catch(() => null) as { thread?: string | null; last_id?: number } | null

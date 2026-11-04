@@ -55,6 +55,7 @@ Ask, in one or two AskUserQuestion rounds. Ask; don't fill in answers from what 
 3. Their time zone. Never guess it. Offer this machine's zone as the first option (`readlink /etc/localtime` on a Mac, `timedatectl` on Linux), and let them pick another.
 4. What they mainly want help with (work, a job search, projects, life admin…), and where their project folders live (for example `~/code`). That folder becomes `HUB_ICON_ROOTS` and is where the companion may start new projects.
 5. Voice: brief and direct, warm and chatty, or formal. Anything it must never do.
+6. Its icon. Bebop makes one from the name: the same record, with a turn, a colour and a groove of its own. Draw nine to choose from: `bun CHECKOUT/scripts/icon.ts grid "NAME" --out ./icon-choices.png`. Show it to them: on a Mac `open ./icon-choices.png`; otherwise give them the path. They pick 1–9, read left to right and top to bottom (1 is the name's own), or ask for more: `--from 9`, then `--from 18`… Keep `SEED` = the script's seed for their pick (it prints which number is which seed). They can change it later in the app: Settings → Appearance. Delete `icon-choices.png` once they've picked.
 
 ## 5. Hub settings
 
@@ -100,6 +101,8 @@ Later: restart with `launchctl kickstart -k gui/$(id -u)/dev.bebop.SLUG`, stop w
 
 **Linux**: write `~/.config/systemd/user/bebop-SLUG.service` with the same settings (`WorkingDirectory=CHECKOUT`, `ExecStart=BUN hub/main.ts`, one `Environment=` line each, `Restart=always`). Have them run `! systemctl --user enable --now bebop-SLUG`.
 
+Then set the icon they picked: `HUB_URL=http://127.0.0.1:PORT HUB_TOKEN_FILE=DATA/agent.token bun CHECKOUT/scripts/icon.ts set SEED` (skip it for seed 0).
+
 **Check:** within ten seconds, `DATA/agent.token` exists and `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat DATA/agent.token)" 'http://127.0.0.1:PORT/agent/history?limit=1'` prints `200`. If not, show the last lines of the log.
 
 ## 7. Reach it from the phone
@@ -113,7 +116,7 @@ Show the command and ask, then run it. Set `URL` = `https://` + `tailscale statu
 
 Then walk them through it on the phone, and wait until they say it's done:
 
-1. Open `URL` in Safari (Chrome on Android). Tailscale must be on.
+1. Open `URL` in Safari (Chrome on Android). Tailscale must be on. Set the icon (step 6) before this: iOS keeps the Home Screen icon it saw when the app was added, until the app is removed and added again.
 2. Share → **Add to Home Screen**, and open the app from the Home Screen (iOS sends notifications only to Home Screen apps).
 3. Tap the name at the top for **Settings**. **Notifications** → Turn on. **Security** → Face ID lock → Turn on (this creates a passkey; after it, the app needs Face ID).
 

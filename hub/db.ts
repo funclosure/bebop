@@ -70,6 +70,8 @@ export function openDb(path: string): Database {
     );
     CREATE TABLE IF NOT EXISTS lists_meta (name TEXT PRIMARY KEY, updated INTEGER);
     CREATE TABLE IF NOT EXISTS reads (thread TEXT PRIMARY KEY, last_id INTEGER NOT NULL);
+    -- Small hub settings the user changes in the app (v0.6.7: icon_seed).
+    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     -- Every key press or prompt the user sent to a pane (v0.6), kept as an audit trail.
     CREATE TABLE IF NOT EXISTS pane_actions (
       id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, pane TEXT NOT NULL, title TEXT,

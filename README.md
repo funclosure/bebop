@@ -102,6 +102,10 @@ That takes the machine's root address (`https://<machine>.<tailnet>.ts.net`). If
 
 `tailscale serve` adds a `Tailscale-User-Login` header to each request. Set `HUB_ALLOWED_LOGINS` to the logins that may use the app. Open the `https://<machine>.<tailnet>.ts.net` URL on your phone, add it to the Home Screen (iOS needs this for notifications), open it from there and tap the bell.
 
+## Icon
+
+The app's icon is made from the agent's name (`HUB_AGENT_NAME`): the Bebop record, with a turn, an accent colour, a groove and tails of its own, picked by a hash of the name (`web/mark.js`). "Bebop" gets the original. Settings → Appearance → Change shows nine variants at a time (a variant that looks like one of your projects' icons says so), and the original Bebop mark; tapping one changes the header, the sidebar, the favicon and the icon offered when the app is added to the Home Screen. iPhone keeps the old Home Screen icon until the app is removed and added again. A project without an icon of its own gets one made from its name the same way. The hub draws the PNGs itself (`hub/raster.ts`, no image library) and keeps them in `data/app-icons/`. From a terminal: `bun scripts/icon.ts grid NAME --out FILE.png`, `bun scripts/icon.ts set SEED`.
+
 ## Lock (passkeys)
 
 The app can also be locked with a passkey (Face ID, Touch ID or the platform's own), on top of the Tailscale login.

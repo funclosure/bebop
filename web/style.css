@@ -991,3 +991,18 @@ body.col-dragging iframe { pointer-events: none; }
 .agent-off { margin: 0; padding: 8px 16px; background: color-mix(in srgb, var(--warn) 14%, var(--bg)); color: var(--text); font-size: 14px; line-height: 1.35; border-bottom: 1px solid var(--line); }
 .agent-off strong { font-weight: 600; }
 .agent-off[hidden] { display: none; }
+
+/* Settings → Appearance: the icon and its variants. */
+.icon-pick-now { display: inline-flex; align-items: center; gap: 10px; }
+.icon-now { width: 32px; height: 32px; border-radius: 8px; }
+.icon-grid-row { flex-direction: column; align-items: stretch; gap: 8px; }
+.icon-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; justify-items: center; }
+.icon-choice { border: 2px solid transparent; border-radius: 16px; padding: 4px; background: none; cursor: pointer; color: inherit; font: inherit; }
+.icon-choice img { border-radius: 13px; }
+.icon-choice.on { border-color: var(--accent); }
+.icon-grid-more { display: flex; justify-content: center; gap: 12px; }
+.proj-made { border-radius: 22%; }
+.icon-choice { position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1.1; }
+.icon-choice.clash img { opacity: .55; }
+.icon-clash { font-size: 11px; color: var(--faint); max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.2; }
+.icon-original { display: flex; align-items: center; gap: 10px; justify-content: center; border-top: 1px solid var(--line); padding-top: 8px; }

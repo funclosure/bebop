@@ -6,6 +6,7 @@ import { S } from './strings.js'
 import { parseAnsi, layoutScreen, spanCss, fleetCounts, findLinks, projectThread, newProjectThread, projectOfThread, validPeer, addressed, unaddressed } from './term.js'
 import { parseDialog, keysFor, cardable } from './dialog.js'
 import { postLimiter } from './limits.js'
+import { markDataUrl, markParams, ORIGINAL_SEED } from './mark.js'
 
 const $ = id => document.getElementById(id)
 const h = (tag, attrs = {}, ...kids) => {
@@ -913,7 +914,8 @@ const needsTopics = () => openTopics().filter(t => topicDot(t) === 'red').sort(b
 const needsCount = () => needsTopics().length + blockedSessions().length
 
 function projectIcon(p, cls = 'proj-icon') {
-  const fallback = () => h('span', { class: `${cls} proj-initial` }, [...(p.name ?? '?')][0].toUpperCase())
+  // A project without an icon of its own gets the mark made from its name (web/mark.js).
+  const fallback = () => h('img', { class: `${cls} proj-made`, src: markDataUrl(p.name ?? '?'), alt: '' })
   const img = p.icon ? h('img', { class: cls, src: p.icon, alt: '', loading: 'lazy' }) : null
   if (img) img.onerror = () => img.replaceWith(fallback())
   const el = img ?? fallback()
@@ -3299,6 +3301,7 @@ function connect() {
   es.addEventListener('peers', e => setPeers(JSON.parse(e.data)))
   es.addEventListener('presence', e => setPresenceState(JSON.parse(e.data)))
   es.addEventListener('listening', e => setListening(JSON.parse(e.data)))
+  es.addEventListener('icon', e => iconChanged(JSON.parse(e.data).seed))
   es.addEventListener('tasks', e => setTasks(JSON.parse(e.data)))
   es.addEventListener('panes', e => setPanes(JSON.parse(e.data)))
 }
@@ -3639,6 +3642,60 @@ function removePasskey(p, mine) {
   })
 }
 
+// ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
+// Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
+// icon (SVG and PNG) from the seed, so changing it changes the header, the sidebar, the
+// favicon and the icon offered when the app is added to the Home Screen.
+const iconPick = { seed: 0, open: false, from: 0 }
+async function loadIcon() { try { iconPick.seed = (await api('api/icon')).seed ?? 0 } catch {} }
+function iconChanged(seed) {
+  iconPick.seed = seed
+  // Reload every picture of the app's own icon (the hub serves them fresh).
+  for (const img of document.querySelectorAll('img[src*="icons/"]')) img.src = img.src.replace(/\?v=\d+$/, '') + `?v=${seed}`
+  for (const l of document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]')) l.href = l.href.replace(/\?v=\d+$/, '') + `?v=${seed}`
+  if (settingsSheet.open) renderSettings()
+}
+async function setIcon(seed) {
+  try {
+    await api('api/icon', { method: 'POST', headers: { 'x-hub-action': '1' }, body: JSON.stringify({ seed }) })
+    iconPick.open = false
+    iconChanged(seed)
+    toast(S.iconSet, 6000)
+  } catch { toast(S.iconFailed) }
+}
+// Which turns are taken already: projects showing a mark made from their name. A variant on the
+// same turn has the same colour too (one angle sets both), so the grid says which it matches.
+function takenTurns() {
+  const taken = new Map()
+  for (const p of projectList()) if (!p.icon && p.key !== selfName()) taken.set(markParams(p.name).angle, p.name)
+  return taken
+}
+const iconLine = seed => seed === ORIGINAL_SEED ? S.iconOriginal : seed ? S.iconSeedLine(seed) : S.iconFromName
+function appearanceRows() {
+  const name = $('app').dataset.name
+  const cur = h('img', { class: 'icon-now', src: markDataUrl(name, iconPick.seed), alt: '', width: 32, height: 32 })
+  const rows = [setRow(S.appIcon, h('span', { class: 'icon-pick-now' }, cur,
+    h('button', { type: 'button', class: 'set-btn plain', 'aria-expanded': String(iconPick.open), onclick: () => { iconPick.open = !iconPick.open; iconPick.from = 0; renderSettings() } }, iconPick.open ? S.done : S.change)),
+    iconLine(iconPick.seed))]
+  if (!iconPick.open) return rows
+  const seeds = Array.from({ length: 9 }, (_, i) => iconPick.from + i)
+  const taken = takenTurns()
+  const choice = (seed, label) => {
+    const clash = seed === ORIGINAL_SEED ? null : taken.get(markParams(name, seed).angle)
+    return h('button', { type: 'button', class: `icon-choice${seed === iconPick.seed ? ' on' : ''}${clash ? ' clash' : ''}`, role: 'radio', 'aria-checked': String(seed === iconPick.seed),
+      'aria-label': label + (clash ? `. ${S.iconClash(clash)}` : ''), title: clash ? S.iconClash(clash) : null, onclick: () => setIcon(seed) },
+      h('img', { src: markDataUrl(name, seed), alt: '', width: 56, height: 56 }),
+      clash ? h('span', { class: 'icon-clash' }, S.iconLike(clash)) : null)
+  }
+  rows.push(h('div', { class: 'set-row icon-grid-row' },
+    h('div', { class: 'icon-grid', role: 'radiogroup', 'aria-label': S.appIcon }, seeds.map(seed => choice(seed, iconLine(seed)))),
+    h('div', { class: 'icon-original' }, choice(ORIGINAL_SEED, S.iconOriginal), h('span', { class: 'set-sub' }, S.iconOriginal)),
+    h('span', { class: 'icon-grid-more' },
+      iconPick.from ? h('button', { type: 'button', class: 'set-btn plain', onclick: () => { iconPick.from = Math.max(0, iconPick.from - 9); renderSettings() } }, S.iconLess) : null,
+      h('button', { type: 'button', class: 'set-btn plain', onclick: () => { iconPick.from += 9; renderSettings() } }, S.iconMore))))
+  return rows
+}
+
 // ---------- settings: a sheet from the title ----------
 const shortDate = ts => ts ? dayFmt.format(new Date(ts)) : ''
 async function notifyStatus() {
@@ -3673,6 +3730,7 @@ async function renderSettings() {
   $('settings-body').replaceChildren(
     section(S.secSecurity, lockRows, lockState.enabled ? S.lockOffHint : S.lockHint),
     section(S.secNotifications, notifyRows, ns === 'install' ? S.installHint : null),
+    section(S.secAppearance, appearanceRows(), S.iconHint),
     section(S.secAbout, [
       setRow(S.version, version.replace('shell-', '') || '–'),
       setRow(S.signedIn, state.login ?? '–'),
@@ -3681,7 +3739,8 @@ async function renderSettings() {
 }
 async function openSettings() {
   keyEdit.id = null; keyEdit.confirm = false
-  await loadLock()
+  iconPick.open = false
+  await Promise.all([loadLock(), loadIcon()])
   await renderSettings()
   settingsSheet.show()
 }
