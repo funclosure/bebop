@@ -1,0 +1,17 @@
+# Sourced by bin/companion, bin/hub-watch and bin/presence (not run on its own).
+# Loads this folder's hub.env (written by /bebop:setup): KEY=VALUE lines for HUB_HOME,
+# HUB_URL and HUB_TOKEN_FILE. Read line by line, never `source`d, so a value may hold
+# spaces, with or without quotes. Blank lines and # comments are skipped.
+() {
+  setopt localoptions extendedglob
+  local f=${1:A:h:h}/hub.env line k v
+  [[ -f $f ]] || return 0
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line == [A-Za-z_]*=* ]] || continue
+    k=${line%%=*}; v=${line#*=}
+    v=${v%%[[:space:]]##\#*}                       # a trailing " # comment"
+    v=${v##[[:space:]]#}; v=${v%%[[:space:]]#}     # surrounding spaces
+    if [[ $v == \"*\" || $v == \'*\' ]]; then v=${v[2,-2]}; fi
+    export "$k=$v"
+  done < $f
+} ${(%):-%x}

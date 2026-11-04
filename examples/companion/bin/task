@@ -51,7 +51,10 @@ if _env.is_file():
     for _line in _env.read_text().splitlines():
         _k, _, _v = _line.partition("=")
         if _k.strip() and not _k.lstrip().startswith("#") and _v:
-            os.environ[_k.strip()] = _v.split("#")[0].strip()
+            _v = _v.split(" #")[0].strip()
+            if len(_v) >= 2 and _v[0] == _v[-1] and _v[0] in "\"'":
+                _v = _v[1:-1]
+            os.environ[_k.strip()] = _v
 HUB = os.environ.get("HUB_URL", "http://127.0.0.1:8787")
 HUB_TOKEN = pathlib.Path(os.environ.get("HUB_TOKEN_FILE") or
                          pathlib.Path(os.environ.get("HUB_HOME") or HOME.parent.parent) / "data/agent.token")

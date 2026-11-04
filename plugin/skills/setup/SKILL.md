@@ -59,7 +59,7 @@ Ask, in one or two AskUserQuestion rounds. Ask; don't fill in answers from what 
 ## 5. Hub settings
 
 - **PORT**: the first free port from 8787 up. A port is taken if `lsof -nP -iTCP:<port> -sTCP:LISTEN` prints anything. Another Bebop hub may already be on 8787; each hub needs its own port.
-- **DATA**: the hub's data folder, one per hub, outside any git repo. On a Mac `~/Library/Application Support/Bebop/SLUG`, on Linux `~/.local/share/bebop/SLUG`. Create it.
+- **DATA**: the hub's data folder, one per hub, outside any git repo: `~/.local/share/bebop/SLUG` (the same on a Mac and on Linux; a path without spaces is easier everywhere). Create it.
 - **LOGIN**: their Tailscale login, which may use the app: `tailscale status --json | jq -r '.User[(.Self.UserID|tostring)].LoginName'`. Confirm it with them. More logins can be added later, separated by commas.
 
 ## 6. Run the hub as a service
@@ -122,10 +122,11 @@ Then walk them through it on the phone, and wait until they say it's done:
 1. Copy the template without overwriting anything: `rsync -a --ignore-existing CHECKOUT/examples/companion/ ./` (ask first).
 2. Write `hub.env` here. `bin/companion` and the other `bin/` scripts (the hooks too) read it, so the companion talks to this hub:
    ```
-   HUB_HOME=CHECKOUT
-   HUB_URL=http://127.0.0.1:PORT
-   HUB_TOKEN_FILE=DATA/agent.token
+   HUB_HOME="CHECKOUT"
+   HUB_URL="http://127.0.0.1:PORT"
+   HUB_TOKEN_FILE="DATA/agent.token"
    ```
+   Use absolute paths and quote each value. The scripts read it as plain `KEY=value` lines (never `source`), so a value may contain spaces.
 3. Fill in `SOUL.md` from the interview: the name as the title, the voice under "How you talk", the never-do list under "Authority", and their main goals under "Current missions". Keep the "Your role: chief of staff" section. Fill in `USER.md`: name, languages, time zone, what they work on, where their projects live.
 4. `.claude/settings.json` already approves the `hub` MCP server (`enabledMcpjsonServers`), so they won't be asked about it.
 5. Check that the companion's scripts find this hub through `hub.env`, even without its settings in the environment (hooks run that way):
@@ -138,8 +139,12 @@ Then walk them through it on the phone, and wait until they say it's done:
 
 It runs in its own terminal pane, started by `bin/companion`, which restarts it after a crash. **The first start must be `bin/companion --fresh`**: without it, Claude Code would continue the most recent conversation in this folder, which is this setup.
 
-- **With herdr**: `herdr tab create --cwd "$PWD" --label SLUG` prints the new tab as JSON. Take its pane id, then `herdr pane run <pane id> bin/companion --fresh`.
-- **Without herdr**: ask them to open a new terminal tab and run `cd <this folder> && bin/companion --fresh`. (Rex, tmux and others work the same way.)
+**Before starting it, warn them:** on its first start in this folder, Claude Code may ask in the companion's pane whether to trust the folder and its new settings (the `.mcp.json` server and the hooks this setup just added), even though this session didn't ask. That pane needs an answer before the companion can do anything. Don't get around it by editing Claude Code's own files; let them answer it.
+
+- **With herdr**: `herdr tab create --cwd "$PWD" --label SLUG` prints the new tab as JSON. Take its pane id, then `herdr pane run <pane id> bin/companion --fresh`. Then watch the pane: every 10 seconds for up to 2 minutes, `herdr pane read <pane id> --source visible --format text`.
+  - If it shows a question (a trust prompt, "Do you trust…", an MCP server approval, any numbered choice), stop waiting and tell them: switch to the SLUG tab in herdr and answer it. They can also answer it from the app: the Sessions view shows the pane, with the prompt as a card.
+  - When the screen shows the companion working (it starts `bin/hub-watch` first), go on.
+- **Without herdr**: ask them to open a new terminal tab and run `cd <this folder> && bin/companion --fresh`, answer any trust or MCP question it asks there, and tell you when it's waiting. (Rex, tmux and others work the same way.)
 
 The new session starts its hub watcher and publishes its commands. That takes up to a minute.
 
@@ -147,7 +152,7 @@ The new session starts its hub watcher and publishes its commands. That takes up
 
 Ask them to send "hi" from the app. The companion should answer in the app within a minute. To check from here: `curl -s -H "Authorization: Bearer $(cat DATA/agent.token)" 'http://127.0.0.1:PORT/agent/history?limit=5'`.
 
-If nothing comes back, check, in order: the companion's pane (an error, or a question waiting there), that `hub.env` has the right port, and the hub log.
+If nothing comes back, check, in order: the companion's pane (an error, or a question waiting there: with herdr, `herdr pane read`), that `hub.env` has the right port and token path, and the hub log.
 
 ## 11. Wrap up
 

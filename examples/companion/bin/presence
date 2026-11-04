@@ -1,6 +1,5 @@
 #!/bin/zsh
 # Hook entry for the hub's presence script (thinking / working / idle in the app).
-# This folder's hub.env (written by /bebop:setup), if there: HUB_HOME, HUB_URL, HUB_TOKEN_FILE.
-[[ -f ${0:A:h:h}/hub.env ]] && { set -a; source ${0:A:h:h}/hub.env; set +a }
+source ${0:A:h}/hub-env   # this folder's hub.env, if there: HUB_HOME, HUB_URL, HUB_TOKEN_FILE
 hub=${HUB_HOME:-${0:A:h:h:h:h}}
 exec bun "$hub/scripts/presence.ts" "$@"

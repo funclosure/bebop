@@ -15,6 +15,7 @@ The hub is the client and the message system; this folder is one way to build an
 | `bin/idle-watch`, `bin/idle-check` | Restart the session when it has been idle for a while and the context is heavy, so it stays cheap and sharp. |
 | `bin/recall` | SessionStart hook: hands a new session the last journal digest and today's tail. |
 | `bin/task` | The task ledger: one Markdown file per open thread in `tasks/`, `NOW.md` generated from them. `task done` archives the hub thread with the same id. Python 3, standard library only. |
+| `bin/hub-env` | Loads `hub.env` for the other scripts (plain `KEY=value` lines, never `source`d). |
 | `bin/restart` | Ends the session so `bin/companion` starts a fresh one (the `/new` command). |
 | `bin/presence` | Hook that shows "thinking" / "Running a command…" in the app. |
 | `.mcp.json` | The hub's MCP server for sending (`reply`, `ask`, …); `HUB_INBOUND=off` because `bin/hub-watch` does the receiving. |
@@ -29,16 +30,17 @@ The hub is the client and the message system; this folder is one way to build an
    ```
    Then write `hub.env` there, so the companion finds the checkout and its hub (`bin/companion` reads it):
    ```sh
-   HUB_HOME=/path/to/bebop
-   HUB_URL=http://127.0.0.1:8787
-   HUB_TOKEN_FILE=/path/to/bebop/data/agent.token   # the hub's HUB_DATA_DIR/agent.token
+   HUB_HOME="/path/to/bebop"
+   HUB_URL="http://127.0.0.1:8787"
+   HUB_TOKEN_FILE="/path/to/bebop/data/agent.token"   # the hub's HUB_DATA_DIR/agent.token
    ```
+   The scripts read these as plain `KEY=value` lines (never `source`d), so quotes and spaces are fine.
 3. Fill in `SOUL.md` and `USER.md`.
 4. Start it in its own terminal pane (a [herdr](https://herdr.dev) tab, a tmux window, a plain terminal tab):
    ```sh
    bin/companion --fresh
    ```
-   `--fresh` the first time: otherwise Claude Code continues the folder's latest conversation, which is the setup session if you ran `/bebop:setup` here. The `hub` MCP server is already approved in `.claude/settings.json`. Without `hub.env`, `HUB_HOME` defaults to the checkout this folder sits in and the hub to `http://127.0.0.1:8787`.
+   On that first start Claude Code may ask, in that pane, to trust the folder and its MCP server and hooks; answer it there (or from the app's Sessions view, with herdr). `--fresh` the first time: otherwise Claude Code continues the folder's latest conversation, which is the setup session if you ran `/bebop:setup` here. The `hub` MCP server is already approved in `.claude/settings.json`. Without `hub.env`, `HUB_HOME` defaults to the checkout this folder sits in and the hub to `http://127.0.0.1:8787`.
 
 Needs `zsh`, `jq`, `bun` and `python3`. Optional: `COMPANION_CHANNELS` to load other channels too (e.g. `plugin:telegram@claude-plugins-official`); `COMPANION_IDLE_MIN` and `COMPANION_CONTEXT_MB` for the idle restart.
 

@@ -14,7 +14,7 @@
 set -u
 home=${0:A:h:h}
 cd "$home" || exit 1
-[[ -f hub.env ]] && { set -a; source ./hub.env; set +a }
+source ${0:A:h}/hub-env   # this folder's hub.env, if there
 export HUB_HOME=${HUB_HOME:-${home:h:h}}
 export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}
 export HUB_TOKEN_FILE=${HUB_TOKEN_FILE:-$HUB_HOME/data/agent.token}
