@@ -1,5 +1,5 @@
 #!/bin/zsh
 # Hook entry for the hub's presence script (thinking / working / idle in the app).
-source ${0:A:h}/hub-env   # this folder's hub.env, if there: HUB_HOME, HUB_URL, HUB_TOKEN_FILE
+source ${0:A:h}/hub-env.zsh   # this folder's hub.env, if there: HUB_HOME, HUB_URL, HUB_TOKEN_FILE
 hub=${HUB_HOME:-${0:A:h:h:h:h}}
 exec bun "$hub/scripts/presence.ts" "$@"

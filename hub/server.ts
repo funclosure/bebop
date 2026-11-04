@@ -38,6 +38,8 @@ export type HubOptions = {
   refineTimeoutMs?: number
   /** A non-idle presence falls back to idle after this long without an update (default 10 min). */
   presenceTtlMs?: number
+  /** How long a message handed to a watcher waits for a sign of life before it's offered again (default 2 min). */
+  redeliverMs?: number
   /** Path to the herdr binary: turns panes on (v0.6). Unset = /api/panes* are 404. */
   herdrBin?: string
   /** Passed to herdr as HERDR_SOCKET_PATH. */
@@ -146,6 +148,14 @@ export function createHub(opts: HubOptions) {
   const allowed = (opts.allowedLogins ?? []).filter(Boolean)
   const maxUpload = (opts.maxUploadMB ?? 2048) * 1024 * 1024
   const webDir = opts.webDir ?? join(import.meta.dir, '..', 'web')
+  // The code this hub runs: its checkout's commit when it started, so a tool can tell whether
+  // the running hub is older than the checkout (and needs a restart).
+  const codeVersion = (() => {
+    try {
+      const r = Bun.spawnSync(['git', '-C', join(import.meta.dir, '..'), 'rev-parse', '--short', 'HEAD'], { stderr: 'ignore' })
+      return r.exitCode === 0 ? r.stdout.toString().trim() || null : null
+    } catch { return null }
+  })()
   const agentId = (opts.agentId ?? agentName).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'agent'
 
   // ---------- tools (see tools.ts): loaded once at start; the hub never installs one ----------
@@ -252,6 +262,7 @@ export function createHub(opts: HubOptions) {
     const out: Record<string, unknown> = {
       id: r.id, ts: r.ts, kind: r.kind, thread: r.thread, reply_to: r.reply_to, user: r.login ?? 'user', body, files,
     }
+    if (redelivered.has(r.id)) out.redelivered = true
     if (r.reply_to) {
       const t = getMsg(r.reply_to)
       if (t) { const tb = bodyOf(t); out.reply_to_text = snippet(tb.text ?? tb.prompt ?? tb.transcript ?? '', 300) }
@@ -264,6 +275,38 @@ export function createHub(opts: HubOptions) {
   }
 
   const broadcastUser = (event: string, data: unknown) => { for (const c of userClients) c.send(event, data) }
+
+  // Received means read. A watcher (channel/watch.ts) only hands messages over: it prints them
+  // and exits, and the session reads its output later, if it's still alive. So /agent/handed
+  // just notes the hand-off; the agent's next sign of life (a hook's presence, a reply, any
+  // other agent POST; never a stream connecting) marks them delivered. One not confirmed within
+  // redeliverMs is offered again, flagged redelivered. In memory: after a hub restart they're
+  // simply offered again. A channel running inside the session acks directly (/agent/ack).
+  const redeliverMs = opts.redeliverMs ?? 2 * 60_000
+  const handed = new Map<number, number>()      // message id → when a watcher got it
+  const redelivered = new Set<number>()
+  function confirmHanded() {
+    if (!handed.size) return
+    const ids = [...handed.keys()]
+    handed.clear()
+    for (const id of ids) redelivered.delete(id)
+    db.query(`UPDATE messages SET delivered_at = ? WHERE sender = 'user' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(Date.now(), ...ids)
+  }
+  const redeliverTimer = setInterval(() => {
+    const now = Date.now()
+    for (const [id, at] of handed) {
+      if (now - at < redeliverMs) continue
+      handed.delete(id)
+      const r = getMsg(id)
+      if (!r || r.delivered_at != null) continue
+      redelivered.add(id)
+      log(`hub: message ${id} wasn't confirmed within ${Math.round(redeliverMs / 1000)} s of its hand-off; offering it again`)
+      // Streams open now (one started after the hand-off skipped it) get it.
+      for (const sent of agentClients.values()) sent.delete(id)
+      deliverToAgents(r)
+    }
+  }, Math.max(50, Math.min(15_000, redeliverMs / 4)))
+
   function deliverToAgents(r: MessageRow) {
     const payload = forAgent(r)
     for (const [c, sent] of agentClients) {
@@ -1512,9 +1555,12 @@ export function createHub(opts: HubOptions) {
             const sent = new Set<number>()
             agentClients.set(c, sent)
             listeningChanged()
-            for (const r of q.undelivered.all() as MessageRow[]) { sent.add(r.id); c.send('message', forAgent(r), r.id) }
+            // Messages handed to a watcher and waiting for the agent to show it read them aren't
+            // sent again yet: the agent restarts its watcher right after waking, before reading.
+            for (const r of q.undelivered.all() as MessageRow[]) { sent.add(r.id); if (!handed.has(r.id)) c.send('message', forAgent(r), r.id) }
           }, c => { if (agentClients.delete(c)) listeningChanged() })
         }
+        if (method === 'GET' && path === '/agent/version') return json({ commit: codeVersion, started: hubStarted })
         // A health check (channel/check.ts): a probe goes to every open agent stream and is
         // neither stored nor shown in the app. The watcher ignores it (it isn't a message).
         if (method === 'POST' && path === '/agent/probe') {
@@ -1524,6 +1570,23 @@ export function createHub(opts: HubOptions) {
           for (const c of agentClients.keys()) c.send('probe', { nonce })
           return json({ ok: true, listeners: agentClients.size })
         }
+        // Any other agent POST is a sign of life: the session is running after the hand-off.
+        // Except going idle: Stop and SessionEnd hooks report that, and SessionEnd also fires
+        // when a session dies, which is exactly when a hand-off may have been lost.
+        if (method === 'POST' && !['/agent/ack', '/agent/handed', '/agent/probe'].includes(path)) {
+          const idle = path === '/agent/presence' && (await req.clone().json().catch(() => null))?.state === 'idle'
+          if (!idle) confirmHanded()
+        }
+        if (method === 'POST' && path === '/agent/handed') {
+          const b = await req.json().catch(() => null) as { ids?: unknown } | null
+          const ids = Array.isArray(b?.ids) ? b!.ids.filter(Number.isInteger) as number[] : []
+          const newest = ids.length ? db.query(`SELECT thread FROM messages WHERE sender = 'user' AND kind != 'reaction' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 1`).get(...ids) as { thread: string | null } | null : null
+          if (newest) setFocus(newest.thread)
+          const live = ids.length ? (db.query(`SELECT id FROM messages WHERE sender = 'user' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).all(...ids) as { id: number }[]) : []
+          const now = Date.now()
+          for (const { id } of live) handed.set(id, now)
+          return json({ ok: true, handed: live.length })
+        }
         if (method === 'POST' && path === '/agent/ack') {
           const b = await req.json().catch(() => null) as { ids?: unknown } | null
           const ids = Array.isArray(b?.ids) ? b!.ids.filter(Number.isInteger) as number[] : []
@@ -1531,6 +1594,7 @@ export function createHub(opts: HubOptions) {
           const newest = ids.length ? db.query(`SELECT thread FROM messages WHERE sender = 'user' AND kind != 'reaction' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 1`).get(...ids) as { thread: string | null } | null : null
           if (newest) setFocus(newest.thread)
           if (ids.length) db.query(`UPDATE messages SET delivered_at = ? WHERE sender = 'user' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(Date.now(), ...ids)
+          for (const id of ids) { handed.delete(id); redelivered.delete(id) }
           return json({ ok: true, acked: ids.length })
         }
         if (method === 'POST' && path === '/agent/send') return agentSend(req)
@@ -1662,6 +1726,7 @@ export function createHub(opts: HubOptions) {
       clearInterval(shellTimer) // open shells are closed at the next start
       panes?.stop()
       for (const c of userClients) c.close()
+      clearInterval(redeliverTimer)
       for (const c of agentClients.keys()) c.close()
       server.stop(true)
       db.close()

@@ -21,7 +21,7 @@ cd "$home" || exit 1
 load_hub() {
   unset HUB_ENV_FILE
   [[ -f $home/hub.env ]] && unset HUB_HOME HUB_URL HUB_TOKEN_FILE   # hub.env alone decides
-  source $home/bin/hub-env
+  source $home/bin/hub-env.zsh
   hub_settings_ok || return 2
   export HUB_HOME=${HUB_HOME:-${home:h:h}}
   export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}

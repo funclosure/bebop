@@ -6,8 +6,9 @@
  * --dangerously-load-development-channels, which asks for confirmation on
  * every launch and so blocks an unattended relaunch. Instead the agent runs
  * this in the background (Bash run_in_background): it waits on the hub's
- * stream, prints the first user message(s) as <channel> tags, acks them once
- * they are written, and exits. The exit wakes the agent, which reads the
+ * stream, prints the first user message(s) as <channel> tags, tells the hub it
+ * handed them over (/agent/handed; the hub marks them received at the agent's next
+ * sign of life, and offers them again after 2 min without one), and exits. The exit wakes the agent, which reads the
  * output and starts the watcher again. Run server.ts with HUB_INBOUND=off
  * alongside, so the two don't both consume the stream.
  *
@@ -16,7 +17,7 @@
  * HUB_WATCH_FAIL_AFTER (default 5): after that many failed connects in a row it stops
  * and says so (exit 3), instead of retrying out of sight. --patient keeps retrying:
  * for when the agent knows the hub is down and wants to be woken once it's back.
- * With HUB_ENV_FILE set (bin/hub-env loaded a hub.env), HUB_URL and HUB_TOKEN_FILE must be
+ * With HUB_ENV_FILE set (bin/hub-env.zsh loaded a hub.env), HUB_URL and HUB_TOKEN_FILE must be
  * set: no defaults. A token file that can't be read stops it at once (exit 2).
  */
 import { readFileSync } from 'fs'
@@ -94,12 +95,14 @@ if (import.meta.main) {
     try {
       const msgs = await waitForMessages()
       process.stdout.write(msgs.map(renderTag).join('\n\n') + '\n\nStart the hub watcher again (run_in_background) before replying.\n')
-      const ack = await fetch(`${HUB_URL}/agent/ack`, {
+      const post = (path: string) => fetch(`${HUB_URL}${path}`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token()}`, 'content-type': 'application/json' },
         body: JSON.stringify({ ids: msgs.map(m => m.id) }),
       })
-      if (!ack.ok) log(`ack failed: HTTP ${ack.status}`)
+      let r = await post('/agent/handed')
+      if (r.status === 404) r = await post('/agent/ack') // a hub from before hand-offs
+      if (!r.ok) log(`telling the hub failed: HTTP ${r.status}`)
       process.exit(0)
     } catch (err) {
       attempt++

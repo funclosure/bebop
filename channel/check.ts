@@ -45,6 +45,13 @@ if (res!.status === 401) fail(4, `the hub at ${url} refused the token from ${tok
 if (!res!.ok) fail(3, `the hub at ${url} answered HTTP ${res!.status}`)
 say(`ok   hub: answers and takes the token`)
 
+// Is the running hub this checkout's code? (Older hubs have no /agent/version.)
+const here = Bun.spawnSync(['git', '-C', join(import.meta.dir, '..'), 'rev-parse', '--short', 'HEAD'], { stderr: 'ignore' })
+const mine = here.exitCode === 0 ? here.stdout.toString().trim() : null
+const ver = await fetch(`${url}/agent/version`, { headers: auth }).then(r => r.ok ? r.json() : null).catch(() => null) as { commit?: string | null } | null
+if (!ver) say(`note hub: older than this checkout (no /agent/version): restart the hub`)
+else if (mine && ver.commit && ver.commit !== mine) say(`note hub: runs ${ver.commit}, this checkout is ${mine}: restart the hub`)
+
 // The round trip: open a stream, send a probe, wait for it to come back on that stream.
 const nonce = crypto.randomUUID()
 const abort = new AbortController()

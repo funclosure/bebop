@@ -1,4 +1,5 @@
-# Sourced by bin/companion, bin/hub-watch and bin/presence (not run on its own).
+# Sourced by bin/companion, bin/hub-watch and bin/presence: `source bin/hub-env.zsh`.
+# Not a command (so it has no exec bit): running it on its own does nothing useful.
 # Loads this folder's hub.env (written by /bebop:setup): KEY=VALUE lines for HUB_HOME,
 # HUB_URL and HUB_TOKEN_FILE. Read line by line, never `source`d, so a value may hold
 # spaces, with or without quotes. Blank lines and # comments are skipped.

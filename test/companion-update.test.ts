@@ -73,10 +73,31 @@ test('update: a file you changed stays when Bebop didn\'t change it; both change
     expect(r.out).toContain('yours   BEBOP.md')
     expect(readFileSync(t.here('BEBOP.md'), 'utf8')).toContain('My own note.')
     expect(readFileSync(t.here('BEBOP.md.bebop-new'), 'utf8')).toContain('New rule from Bebop.')
-    expect(r.out).toContain('bin/update --accept BEBOP.md')
+    expect(r.out).toContain('Waiting: BEBOP.md')
     expect(t.run('--accept', 'BEBOP.md').code).toBe(0)
     expect(existsSync(t.here('BEBOP.md.bebop-new'))).toBe(false)
     expect(t.run().out).toContain('up to date')                 // until Bebop changes it again
+  } finally { t.done() }
+})
+
+test('update: --take puts Bebop\'s version in place, --keep keeps yours; both clear the .bebop-new; `all` works', () => {
+  const t = setup({ record: false, git: true })
+  try {
+    appendFileSync(t.here('bin/recall'), '\n# mine\n')
+    appendFileSync(t.here('bin/task'), '\n# mine too\n')
+    appendFileSync(t.here('bin/hub-watch'), '\n# and this\n')
+    const r = t.run()
+    expect(r.out).toMatch(/^Bebop \S+ \(/m)                        // which Bebop, on every run
+    expect(r.out).toContain('bin/update --take FILE')
+    expect(t.run('--take', 'bin/recall').out).toContain("took Bebop's bin/recall")
+    expect(readFileSync(t.here('bin/recall'), 'utf8')).not.toContain('# mine')
+    expect(t.git('log', '--format=%s', '-1')).toContain("Take Bebop's bin/recall")
+    expect(t.run('--keep', 'bin/task').out).toContain('kept yours: bin/task')
+    expect(readFileSync(t.here('bin/task'), 'utf8')).toContain('# mine too')
+    expect(t.run('--take', 'all').out).toContain("took Bebop's bin/hub-watch")
+    for (const f of ['bin/recall', 'bin/task', 'bin/hub-watch']) expect(existsSync(t.here(f + '.bebop-new'))).toBe(false)
+    expect(t.run().out).toContain('up to date')
+    expect(t.run('--dry').out).toMatch(/^Bebop /m)
   } finally { t.done() }
 })
 

@@ -27,6 +27,15 @@ test('check: all good is three ok lines; --hello sends a real message', async ()
   expect(JSON.stringify(msgs)).toContain('Sam is connected')
 })
 
+test('version: the hub says which commit it runs; check notes a hub that runs other code', async () => {
+  const v = await (await agent('/agent/version')).json()
+  expect(v).toHaveProperty('commit')
+  expect(typeof v.started).toBe('number')
+  const r = await check([], { HUB_URL: hub.url, HUB_TOKEN_FILE: token })
+  expect(r.code).toBe(0)
+  expect(r.out).not.toContain('note hub:') // same checkout as the test's hub
+})
+
 test('check: each failure says what to fix, with its own exit code', async () => {
   expect((await check(['--strict'], { HUB_URL: undefined, HUB_TOKEN_FILE: token })).code).toBe(2)
   const noToken = await check([], { HUB_URL: hub.url, HUB_TOKEN_FILE: '/nonexistent/agent.token' })

@@ -16,7 +16,7 @@ The hub is the client and the message system; this folder is one way to build an
 | `bin/idle-watch`, `bin/idle-check` | Restart the session when it has been idle for a while and the context is heavy, so it stays cheap and sharp. |
 | `bin/recall` | SessionStart hook: hands a new session the last journal digest and today's tail. |
 | `bin/task` | The task ledger: one Markdown file per open thread in `tasks/`, `NOW.md` generated from them. `task done` archives the hub thread with the same id. Python 3, standard library only. |
-| `bin/hub-env` | Loads `hub.env` for the other scripts (plain `KEY=value` lines, never `source`d). With a `hub.env`, every setting must be in it: no defaults. |
+| `bin/hub-env.zsh` | Loads `hub.env` for the other scripts (plain `KEY=value` lines, never `source`d). With a `hub.env`, every setting must be in it: no defaults. |
 | `bin/update` | Updates Bebop's files from the checkout, keeping yours (see Updating). |
 | `bin/restart` | Ends the session so `bin/companion` starts a fresh one (the `/new` command). |
 | `bin/presence` | Hook that shows "thinking" / "Running a command…" in the app. |
@@ -50,11 +50,11 @@ Needs `zsh`, `jq`, `bun` and `python3`. Optional: `COMPANION_CHANNELS` to load o
 
 `/bebop:update` (in Claude Code, in this folder) updates the Bebop checkout, restarts the hub and runs `bin/update`. The companion can run it on itself. By hand: `git pull` in the checkout, restart the hub, then `bin/update --dry` to see what would change and `bin/update` to do it.
 
-- **Bebop's files** are replaced when you haven't changed them: `bin/*`, `BEBOP.md`, `.mcp.json`. If you have, yours stays and Bebop's new version lands next to it as `FILE.bebop-new`; merge what you want, then `bin/update --accept FILE`.
+- **Bebop's files** are replaced when you haven't changed them: `bin/*`, `BEBOP.md`, `.mcp.json`. If you have, yours stays and Bebop's new version lands next to it as `FILE.bebop-new`. Then `bin/update --take FILE` (Bebop's replaces yours), `--keep FILE` (yours stays), or merge by hand and `--accept FILE`; `FILE` can be `all`.
 - **Merged**: `.claude/settings.json` (Bebop's hooks, permissions and MCP approval are added; yours stay) and `.gitignore`.
 - **Yours, never touched**: `SOUL.md`, `USER.md`, `MEMORY.md`, `CLAUDE.md`, `NOW.md`, `memory/`, `journal/`, `tasks/`, `hub.env`, `setup-notes.md`.
 - `.bebop.json` records which Bebop version each of Bebop's files is based on (`bin/update --record`, which setup runs). A companion made before it existed: on the first update every Bebop file that differs counts as yours.
-- It commits only the files it changed, as "Update from Bebop <commit>", and never pushes. Restart the companion afterwards (`/new`).
+- It commits only the files it changed, as "Update from Bebop <commit>", and never pushes. Restart the hub first if it runs older code (`GET /agent/version`, or the `note hub:` line of `channel/check.ts`), then the companion: `/new`, or, when `bin/companion` itself changed, `/exit`, Ctrl-C during the countdown, and `bin/companion` again.
 
 ## Why it's built this way
 

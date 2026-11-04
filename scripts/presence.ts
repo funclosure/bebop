@@ -59,7 +59,7 @@ async function main() {
     body = args[0] ? { state: args[0], ...(args[1] ? { detail: args.slice(1).join(' ') } : {}) } : null
   }
   if (!body) return
-  // With a hub.env (bin/hub-env sets HUB_ENV_FILE) the settings come from it, never a default.
+  // With a hub.env (bin/hub-env.zsh sets HUB_ENV_FILE) the settings come from it, never a default.
   if (process.env.HUB_ENV_FILE && (!process.env.HUB_URL || !process.env.HUB_TOKEN_FILE))
     throw new Error(`hub.env (${process.env.HUB_ENV_FILE}) must set HUB_URL and HUB_TOKEN_FILE`)
   const url = (process.env.HUB_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '')

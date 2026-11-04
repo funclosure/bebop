@@ -3,7 +3,10 @@
 
   bin/update [--dry] [--no-commit] [--checkout DIR] [--folder DIR]
   bin/update --record              note the Bebop files as installed now (setup runs this)
-  bin/update --accept FILE...      you've merged FILE by hand: mark it as based on Bebop's version
+  bin/update --take FILE...        take Bebop's version of FILE (yours is replaced)
+  bin/update --keep FILE...        keep yours; don't offer this Bebop version again
+  bin/update --accept FILE...      you've merged FILE by hand (same record as --keep)
+  FILE can be `all` for every file waiting with a .bebop-new.
 
 Bebop's files (OWNED below) are replaced when you haven't changed them. If you have, yours stays
 and Bebop's new version is written next to it as FILE.bebop-new; merge what you want, then run
@@ -26,7 +29,7 @@ from pathlib import Path
 # Bebop's files in a companion folder. Paths relative to the folder.
 OWNED = [
     "BEBOP.md", ".mcp.json",
-    "bin/companion", "bin/hub-env", "bin/hub-watch", "bin/idle-check", "bin/idle-watch",
+    "bin/companion", "bin/hub-env.zsh", "bin/hub-watch", "bin/idle-check", "bin/idle-watch",
     "bin/presence", "bin/recall", "bin/restart", "bin/task", "bin/update",
 ]
 MERGED = [".claude/settings.json", ".gitignore"]
@@ -39,7 +42,7 @@ def sha(p: Path) -> str | None:
 
 
 def read_env(folder: Path) -> dict:
-    """hub.env as KEY=value lines (the same rules as bin/hub-env)."""
+    """hub.env as KEY=value lines (the same rules as bin/hub-env.zsh)."""
     out, f = {}, folder / "hub.env"
     if f.is_file():
         for line in f.read_text().splitlines():
@@ -87,7 +90,9 @@ def main(argv=None) -> int:
     ap.add_argument("--dry", action="store_true", help="only say what would change")
     ap.add_argument("--no-commit", action="store_true", help="don't commit in the companion's git repo")
     ap.add_argument("--record", action="store_true", help="note the Bebop files as installed now")
-    ap.add_argument("--accept", nargs="+", metavar="FILE", help="FILE now includes Bebop's version")
+    ap.add_argument("--accept", nargs="+", metavar="FILE", help="FILE now includes Bebop's version (merged by hand)")
+    ap.add_argument("--keep", nargs="+", metavar="FILE", help="keep your FILE; don't offer this Bebop version again")
+    ap.add_argument("--take", nargs="+", metavar="FILE", help="replace your FILE with Bebop's version")
     ap.add_argument("--checkout", help="the Bebop checkout (default: HUB_HOME from hub.env)")
     ap.add_argument("--folder", help="the companion folder (default: the one this script is in)")
     ap.add_argument("--no-handoff", action="store_true", help=argparse.SUPPRESS)
@@ -124,15 +129,28 @@ def main(argv=None) -> int:
         print(f"recorded {len(base)} Bebop files (Bebop {commit})")
         return 0
 
-    if a.accept:
-        for f in a.accept:
+    picked = a.take or a.keep or a.accept
+    if picked:
+        verb = "took Bebop's" if a.take else "kept yours:" if a.keep else "accepted"
+        if picked == ["all"]:
+            picked = [f for f in OWNED if (folder / (f + ".bebop-new")).is_file()]
+        done_files = []
+        for f in picked:
             f = f.removesuffix(".bebop-new")
             if f not in OWNED:
                 print(f"not a Bebop file: {f}", file=sys.stderr); return 2
+            if a.take:
+                (folder / f).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(template / f, folder / f)
             base[f] = sha(template / f)
             (folder / (f + ".bebop-new")).unlink(missing_ok=True)
-            print(f"accepted {f}")
+            done_files.append(f)
+            print(f"{verb} {f}")
         save()
+        if a.take and not a.no_commit and (folder / ".git").exists() and done_files:
+            paths = done_files + [RECORD]
+            subprocess.run(["git", "-C", str(folder), "add", "-A", "--", *paths], check=False)
+            subprocess.run(["git", "-C", str(folder), "commit", "-q", "-m", f"Take Bebop's {', '.join(done_files)} ({commit})", "--", *paths], check=False)
         return 0
 
     done, conflicts, notes = [], [], []
@@ -175,6 +193,7 @@ def main(argv=None) -> int:
         if add:
             merged.append((".gitignore", "\n".join(have + add) + "\n"))
 
+    print(f"Bebop {commit} ({checkout})")
     for kind, f in done: print(f"{kind:7} {f}")
     for f, _ in merged: print(f"merge   {f}")
     for f in conflicts: print(f"yours   {f}  (changed here and in Bebop: Bebop's version goes to {f}.bebop-new)")
@@ -207,8 +226,11 @@ def main(argv=None) -> int:
         subprocess.run(["git", "-C", str(folder), "add", "-A", "--", *paths], check=False)
         subprocess.run(["git", "-C", str(folder), "commit", "-q", "-m", f"Update from Bebop {commit}", "--", *paths], check=False)
     if conflicts:
-        print("\nTo finish: compare each FILE with FILE.bebop-new, merge what you want into FILE, then run:")
-        print("  bin/update --accept " + " ".join(conflicts))
+        print("\nFor each FILE: compare it with FILE.bebop-new, then one of")
+        print("  bin/update --take FILE     Bebop's version replaces yours")
+        print("  bin/update --keep FILE     yours stays")
+        print("  bin/update --accept FILE   you merged the two by hand")
+        print("(FILE can be `all`.) Waiting: " + " ".join(conflicts))
     if done or merged:
         print("\nRestart the companion to load the new files (/new in the app, or bin/restart).")
     return 0
