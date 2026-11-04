@@ -1468,8 +1468,8 @@ function triggerAt() {
   const before = input.value.slice(0, c)
   let m = /^\/([\w-]*)$/.exec(before)
   if (m) return { kind: 'cmd', q: m[1].toLowerCase(), start: 0, end: c + (/^[\w-]*/.exec(input.value.slice(c))[0].length) }
-  m = /(^|\s)@([\w.-]*)$/.exec(before)
-  if (m) return { kind: 'peer', q: m[2].toLowerCase(), start: c - m[2].length - 1, end: c + (/^[\w.-]*/.exec(input.value.slice(c))[0].length) }
+  m = /(^|\s)@([\p{L}\p{M}\p{N}_.-]*)$/u.exec(before)
+  if (m) return { kind: 'peer', q: m[2].toLowerCase(), start: c - m[2].length - 1, end: c + (/^[\p{L}\p{M}\p{N}_.-]*/u.exec(input.value.slice(c))[0].length) }
   return null
 }
 function updateSuggest() {
@@ -1584,7 +1584,7 @@ function startPeerMessage(name) {
     if (panes.open || state.blank) switchThread(null)
   }
   const mention = `@${name} `
-  const v = input.value.replace(/^@[\w.-]+ /, '')
+  const v = input.value.replace(/^@[\p{L}\p{M}\p{N}_.-]+ /u, '')
   input.value = mention + v
   input.focus()
   input.setSelectionRange(input.value.length, input.value.length)
@@ -3222,7 +3222,25 @@ const sendFailed = () => state.outbox.some(p => p.failed)
 const agentDot = () => hubLost() || sendFailed() ? 'red' : state.agentActive ? 'green' : 'quiet'
 const agentLine = () => hubLost() ? S.reconnecting : sendFailed() ? S.notSent.split(' · ')[0] : state.agentPresence ?? null
 function hidePresenceForMessage() { presenceHiddenAt = Math.max(presenceHiddenAt, state.presence.updated); renderPresence() }
-async function loadPresence() { try { setPresenceState(await api('api/presence')) } catch {} }
+async function loadPresence() {
+  try { setPresenceState(await api('api/presence')) } catch {}
+  try { setListening(await api('api/listening')) } catch {}
+}
+// "Not connected": nothing has listened on the agent side (its watcher or channel) for a while.
+// A watcher reconnects between messages, so a short gap is normal; only a long one shows.
+const LISTEN_GAP_MS = 3 * 60_000
+function setListening(l) { state.listening = l; renderListening() }
+function renderListening() {
+  const b = $('agent-off'), l = state.listening
+  const now = Date.now()
+  const off = !!l && !l.listening && !hubLost() && now - (l.last ?? l.started) > LISTEN_GAP_MS
+  b.hidden = !off
+  if (!off) return
+  const name = $('app').dataset.name
+  b.replaceChildren(h('strong', {}, S.agentOff(name)), ' ', h('span', {}, l.last ? S.agentOffSince(agoText(now - l.last)) : S.agentNeverOn))
+}
+const agoText = ms => ms < 3_600_000 ? S.minutesAgo(Math.max(1, Math.round(ms / 60_000))) : ms < 86_400_000 ? S.hoursAgo(Math.round(ms / 3_600_000)) : S.daysAgo(Math.round(ms / 86_400_000))
+setInterval(renderListening, 30_000)
 setInterval(renderPresence, 30000) // lets an old presence expire even without events
 
 // ---------- live events ----------
@@ -3276,6 +3294,7 @@ function connect() {
   es.addEventListener('commands', e => { state.commands = JSON.parse(e.data).commands; if (suggest.open) updateSuggest() })
   es.addEventListener('peers', e => setPeers(JSON.parse(e.data)))
   es.addEventListener('presence', e => setPresenceState(JSON.parse(e.data)))
+  es.addEventListener('listening', e => setListening(JSON.parse(e.data)))
   es.addEventListener('tasks', e => setTasks(JSON.parse(e.data)))
   es.addEventListener('panes', e => setPanes(JSON.parse(e.data)))
 }

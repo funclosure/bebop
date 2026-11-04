@@ -4,7 +4,9 @@
 # Waits for the next message(s) from the hub app, prints them as <channel>
 # tags and exits, which wakes the session. Start it again after each wake.
 source ${0:A:h}/hub-env   # this folder's hub.env, if there: HUB_HOME, HUB_URL, HUB_TOKEN_FILE
+hub_settings_ok || exit 2
 hub=${HUB_HOME:-${0:A:h:h:h:h}}
 export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}
 export HUB_TOKEN_FILE=${HUB_TOKEN_FILE:-$hub/data/agent.token}
-exec bun "$hub/channel/watch.ts"
+# --patient: keep waiting while the hub is down (after a "can't reach the hub" exit).
+exec bun "$hub/channel/watch.ts" "$@"

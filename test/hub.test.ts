@@ -258,15 +258,24 @@ test('peers: agent publishes with updated time, user reads, SSE announces', asyn
   const events = user('/api/events').then(r => readSSE(r, e => e.some(x => x.event === 'peers')))
   await Bun.sleep(50)
   const updated = '2026-10-20T10:00:00Z'
-  await agent('/agent/peers', { method: 'POST', body: JSON.stringify({ updated, peers: [
+  const r = await (await agent('/agent/peers', { method: 'POST', body: JSON.stringify({ updated, peers: [
     { name: '@app-1', kind: 'claude', state: 'busy', detail: 'Building 1.4.2', project: 'app' },
     { name: 'site-2', state: 'idle' },
+    { name: 'Zoë', state: 'idle' },
+    { name: 'Zoe\u0308' }, // the same name, decomposed
     { name: 'no spaces allowed' },
-  ] }) })
+    { state: 'idle' },
+  ] }) })).json()
+  expect(r.count).toBe(3)
+  expect(r.rejected).toEqual([
+    { name: 'Zoe\u0308', reason: 'listed twice' },
+    { name: 'no spaces allowed', reason: 'only letters, digits, _ . and - (no spaces)' },
+    { name: '', reason: 'no name' },
+  ])
   const got = await (await user('/api/peers')).json()
   expect(got.updated).toBe(Date.parse(updated))
-  expect(got.peers).toEqual([{ name: 'app-1', kind: 'claude', state: 'busy', detail: 'Building 1.4.2', project: 'app' }, { name: 'site-2', state: 'idle' }])
-  expect((await events).find(x => x.event === 'peers')!.data.peers.length).toBe(2)
+  expect(got.peers).toEqual([{ name: 'app-1', kind: 'claude', state: 'busy', detail: 'Building 1.4.2', project: 'app' }, { name: 'site-2', state: 'idle' }, { name: 'Zoë', state: 'idle' }])
+  expect((await events).find(x => x.event === 'peers')!.data.peers.length).toBe(3)
   expect((await user('/api/peers', { headers: { 'tailscale-user-login': 'x@example.com' } })).status).toBe(403)
 })
 

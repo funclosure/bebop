@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 /**
  * Report the agent's presence (idle / thinking / working) to the Bebop hub.
- * Made to be called from agent hooks: it exits fast, prints nothing on stdout,
- * never fails the caller, and is silent when the hub is down.
+ * Made to be called from agent hooks: it exits fast, prints nothing on stdout and
+ * never fails the caller (always exit 0). What went wrong goes to stderr in one line
+ * (no hub, a refused token, a missing setting), so it shows in the hook's output.
  *
  *   bun scripts/presence.ts <idle|thinking|working> [detail]
  *   bun scripts/presence.ts --hook        # reads a Claude Code hook event on stdin
@@ -58,20 +59,29 @@ async function main() {
     body = args[0] ? { state: args[0], ...(args[1] ? { detail: args.slice(1).join(' ') } : {}) } : null
   }
   if (!body) return
+  // With a hub.env (bin/hub-env sets HUB_ENV_FILE) the settings come from it, never a default.
+  if (process.env.HUB_ENV_FILE && (!process.env.HUB_URL || !process.env.HUB_TOKEN_FILE))
+    throw new Error(`hub.env (${process.env.HUB_ENV_FILE}) must set HUB_URL and HUB_TOKEN_FILE`)
   const url = (process.env.HUB_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '')
   const tokenFile = process.env.HUB_TOKEN_FILE || join(import.meta.dir, '..', 'data', 'agent.token')
-  const token = readFileSync(tokenFile, 'utf8').trim()
-  await fetch(`${url}/agent/presence`, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(1000),
-  })
+  let token: string
+  try { token = readFileSync(tokenFile, 'utf8').trim() } catch (e: any) { throw new Error(`can't read the token file ${tokenFile} (${e?.code ?? e})`) }
+  let res: Response
+  try {
+    res = await fetch(`${url}/agent/presence`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(1000),
+    })
+  } catch (e: any) { throw new Error(`no hub at ${url} (${e?.cause?.code ?? e?.name ?? e})`) }
+  if (res.status === 401) throw new Error(`the hub at ${url} refused the token from ${tokenFile}`)
+  if (!res.ok) throw new Error(`the hub at ${url} answered HTTP ${res.status}`)
 }
 
 if (import.meta.main) {
   const deadline = setTimeout(() => process.exit(0), 1500) // never block the caller
-  try { await main() } catch {}
+  try { await main() } catch (e) { process.stderr.write(`presence: ${e instanceof Error ? e.message : e}\n`) }
   clearTimeout(deadline)
   process.exit(0)
 }

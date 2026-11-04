@@ -10,14 +10,42 @@
 # Settings: hub.env in this folder (written by /bebop:setup), if there: HUB_HOME, HUB_URL,
 # HUB_TOKEN_FILE. Otherwise the environment, or these defaults:
 # Env: HUB_HOME (the Bebop checkout; default: the repo this folder sits in),
-#      COMPANION_CHANNELS (optional, e.g. plugin:telegram@claude-plugins-official).
+#      COMPANION_CHANNELS (optional, e.g. plugin:telegram@claude-plugins-official),
+#      COMPANION_CLAUDE (the claude command; default: claude on PATH).
 set -u
 home=${0:A:h:h}
 cd "$home" || exit 1
-source ${0:A:h}/hub-env   # this folder's hub.env, if there
-export HUB_HOME=${HUB_HOME:-${home:h:h}}
-export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}
-export HUB_TOKEN_FILE=${HUB_TOKEN_FILE:-$HUB_HOME/data/agent.token}
+# The hub settings, read again before every start, so a fix to hub.env applies on the next
+# relaunch or /new. With a hub.env every setting comes from it (no defaults); without one,
+# the checkout this folder sits in and its hub on 8787.
+load_hub() {
+  unset HUB_ENV_FILE
+  [[ -f $home/hub.env ]] && unset HUB_HOME HUB_URL HUB_TOKEN_FILE   # hub.env alone decides
+  source $home/bin/hub-env
+  hub_settings_ok || return 2
+  export HUB_HOME=${HUB_HOME:-${home:h:h}}
+  export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}
+  export HUB_TOKEN_FILE=${HUB_TOKEN_FILE:-$HUB_HOME/data/agent.token}
+}
+# Before every start: is the hub there and does it take our token? A wrong setting stops
+# here, loudly; a hub that's down (restarting, say) is waited for.
+check_hub() {
+  local check=$HUB_HOME/channel/check.ts code
+  [[ -f $check ]] || return 0   # an older checkout without the check
+  while true; do
+    bun $check ${HUB_ENV_FILE:+--strict} --quiet
+    code=$?
+    (( code == 0 )) && return 0
+    if (( code == 3 )); then
+      echo "companion: waiting for the hub at $HUB_URL (checking again in 15 s; Ctrl-C to stop)…" >&2
+      sleep 15 || exit 0
+      load_hub || exit 2
+      continue
+    fi
+    echo "companion: not starting: fix the hub settings above (hub.env), then run bin/companion again." >&2
+    exit 2
+  done
+}
 export COMPANION_LOOP=1
 channels=${COMPANION_CHANNELS-}
 quick=60        # a session shorter than this (seconds) counts as a quick exit
@@ -26,6 +54,8 @@ fresh=${1:-}
 quick_exits=0
 rm -f .restart
 while true; do
+  load_hub || exit 2
+  check_hub
   args=()
   [[ -n $channels ]] && args+=(--channels $channels)
   # Claude Code keeps transcripts under ~/.claude/projects/<path with / → ->
@@ -39,7 +69,7 @@ while true; do
   # first: --channels takes a list and would swallow a trailing argument.
   startup=("Startup (launched by bin/companion): start bin/hub-watch and bin/idle-watch in the background, publish set_commands and set_peers, check NOW.md and the recall digest for anything owed, then wait.")
   started=$SECONDS
-  claude "${startup[@]}" "${args[@]}"
+  ${COMPANION_CLAUDE:-claude} "${startup[@]}" "${args[@]}"
   code=$?
   fresh=
   if [[ -f .restart ]]; then

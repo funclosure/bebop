@@ -986,3 +986,8 @@ body.col-dragging iframe { pointer-events: none; }
   /* Tasks live on the agent's row here. */
   #tasks-chip { display: none !important; }
 }
+
+/* The agent isn't connected: a quiet bar under the header. */
+.agent-off { margin: 0; padding: 8px 16px; background: color-mix(in srgb, var(--warn) 14%, var(--bg)); color: var(--text); font-size: 14px; line-height: 1.35; border-bottom: 1px solid var(--line); }
+.agent-off strong { font-weight: 600; }
+.agent-off[hidden] { display: none; }

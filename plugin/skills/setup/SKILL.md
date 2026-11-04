@@ -130,10 +130,10 @@ Then walk them through it on the phone, and wait until they say it's done:
 3. Record Bebop's files, so `/bebop:update` can later tell them from the user's: `python3 bin/update --record` (it writes `.bebop.json`).
 4. Fill in `SOUL.md` from the interview: the name as the title, the voice under "How you talk", the never-do list under "Authority", and their main goals under "Current missions". Keep the "Your role: chief of staff" section. Fill in `USER.md`: name, languages, time zone, what they work on, where their projects live.
 5. `.claude/settings.json` already approves the `hub` MCP server (`enabledMcpjsonServers`), so they won't be asked about it.
-6. Check that the companion's scripts find this hub through `hub.env`, even without its settings in the environment (hooks run that way):
-   - `echo '{}' | env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/presence --hook` prints nothing and exits 0.
-   - `env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/task list` runs without an error.
-   If either fails, fix `hub.env` before going on.
+6. Check the wiring end to end, the way the companion will use it:
+   - `zsh -c 'source bin/hub-env && hub_settings_ok && bun "$HUB_HOME/channel/check.ts" --strict --hello "NAME is set up. You'll hear from me here."'`. It checks the settings, makes a real request with the token, sends a probe around the agent stream, and sends that hello to the app. It prints `ok` per step, or what's wrong and how to fix it. Don't go on until all pass.
+   - Ask them whether the hello shows in the app. If it doesn't, the app isn't reaching this hub: check the address from step 7.
+   - The hooks: `echo '{}' | env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/presence --hook` prints nothing (an error there names the problem). `env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/task list` runs without an error.
 7. `git init && git add -A && git commit -m "NAME: first day"`. The companion commits its memory and journal here; nothing is pushed.
 
 ## 9. Start the companion
@@ -147,7 +147,7 @@ It runs in its own terminal pane, started by `bin/companion`, which restarts it 
   - When the screen shows the companion working (it starts `bin/hub-watch` first), go on.
 - **Without herdr**: ask them to open a new terminal tab and run `cd <this folder> && bin/companion --fresh`, answer any trust or MCP question it asks there, and tell you when it's waiting. (Rex, tmux and others work the same way.)
 
-The new session starts its hub watcher and publishes its commands. That takes up to a minute.
+`bin/companion` runs the same check (quietly) before every start. If `hub.env` is wrong it stops with the reason; if the hub is down it waits for it and says so in that pane. The new session then starts its hub watcher and publishes its commands, which takes up to a minute.
 
 ## 10. Say hello
 

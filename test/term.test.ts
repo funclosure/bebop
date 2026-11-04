@@ -122,7 +122,12 @@ test('project conversation: thread id, the @peer prefix, and what the bubble sho
   expect(addressed('@notes-1a hello', 'notes-1a')).toBe('@notes-1a hello')
   expect(unaddressed('@notes-1a hello @you')).toBe('hello @you')
   expect(validPeer('notes-1a')).toBe(true)
-  expect(validPeer('Zoë')).toBe(false)
+  expect(validPeer('Zoë')).toBe(true)
+  expect(validPeer('Zoe\u0308')).toBe(true) // decomposed: same name as Zoë
+  expect(validPeer('日本')).toBe(true)
+  expect(validPeer('a b')).toBe(false)
+  expect(validPeer('@x')).toBe(false)
+  expect(unaddressed('@Zoë hi')).toBe('hi')
   expect(validPeer(null)).toBe(false)
 })
 

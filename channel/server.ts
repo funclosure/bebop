@@ -277,7 +277,7 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
             items: {
               type: 'object',
               properties: {
-                name: { type: 'string', description: 'Letters, digits, _ . and -.' },
+                name: { type: 'string', description: 'Letters and digits in any script, _ . and -; no spaces.' },
                 kind: { type: 'string' },
                 state: { type: 'string', description: 'e.g. idle, busy, waiting' },
                 detail: { type: 'string', description: 'One line: what it is doing.' },
@@ -393,7 +393,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
       }
       case 'set_peers': {
         const r = await hub('/agent/peers', { peers: a.peers, ...(a.updated ? { updated: a.updated } : {}) })
-        return ok(`peers set (${r.count})`)
+        const bad = Array.isArray(r.rejected) && r.rejected.length ? `; not shown: ${r.rejected.map((x: any) => `"${x.name}" (${x.reason})`).join(', ')}` : ''
+        return ok(`peers set (${r.count})${bad}`)
       }
       case 'set_tasks': {
         const r = await hub('/agent/tasks', { tasks: a.tasks })

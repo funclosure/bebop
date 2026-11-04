@@ -6,6 +6,7 @@
   setopt localoptions extendedglob
   local f=${1:A:h:h}/hub.env line k v
   [[ -f $f ]] || return 0
+  export HUB_ENV_FILE=$f   # so the scripts know hub.env is in charge: no defaults then
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line == [A-Za-z_]*=* ]] || continue
     k=${line%%=*}; v=${line#*=}
@@ -15,3 +16,14 @@
     export "$k=$v"
   done < $f
 } ${(%):-%x}
+
+# With a hub.env, every setting must come from it: a missing one is an error, never a default.
+# hub_settings_ok prints what's missing and returns 1.
+hub_settings_ok() {
+  [[ -n ${HUB_ENV_FILE-} ]] || return 0
+  local k missing=()
+  for k in HUB_HOME HUB_URL HUB_TOKEN_FILE; do [[ -n ${(P)k-} ]] || missing+=($k); done
+  (( ${#missing} )) || return 0
+  print -u2 "hub.env ($HUB_ENV_FILE) doesn't set: ${missing[*]}. Add them (KEY=\"value\" lines); see /bebop:setup step 8."
+  return 1
+}

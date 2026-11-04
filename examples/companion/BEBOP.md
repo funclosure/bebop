@@ -11,6 +11,8 @@
 
 The hub is not loaded as a channel (the development-channels flag prompts on every launch, which would block unattended relaunches). Instead, at startup and after every wake, start `bin/hub-watch` with Bash `run_in_background`. It exits when a message arrives, which wakes you. Read its output file: the messages are `<channel source="hub" …>` tags. Start the watcher again *before* replying, so nothing waits on you. Run only one at a time. The hub replays anything not yet received, so a gap between watchers loses nothing.
 
+If the watcher's output says **"The hub watcher stopped"**, it couldn't reach the hub or its settings are wrong; it says which. Run `bun "$HUB_HOME/channel/check.ts"` to see where it breaks, note it in the journal, and fix what you can (`hub.env` is the user's file: tell them what's wrong rather than guessing). If the hub is just down or restarting, start `bin/hub-watch --patient` in the background instead: it waits for the hub and wakes you with the next message. You can't reach the user through the hub while it's down; they see in the app that you're not connected.
+
 At startup, publish to the app:
 - `set_commands`: new (save and start fresh), now (what's in flight), waiting (decisions waiting on the user, as cards), peers (refresh peer sessions), task `<id>` (one thread in detail).
 - `set_peers`: run ListAgents, then one entry per peer session: name, state (idle/busy; offline if its pane is back at the shell), project, short detail. Republish when the user sends `/peers`.

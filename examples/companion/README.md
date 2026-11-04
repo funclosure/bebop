@@ -11,12 +11,12 @@ The hub is the client and the message system; this folder is one way to build an
 | `SOUL.md`, `USER.md`, `MEMORY.md` | Who the companion is, what it knows about you, an index of facts in `memory/`. Write these first. |
 | `CLAUDE.md` | Yours: loads SOUL, USER, MEMORY, NOW and BEBOP; add your own standing rules here. |
 | `BEBOP.md` | Bebop's: how it runs on Claude Code (receiving hub messages, commands, routing to peers, saving and restarting). Replaced on updates. |
-| `bin/companion` | The launcher. Starts Claude Code with a startup prompt, relaunches after a crash (`--continue`), starts fresh after `bin/restart`. |
+| `bin/companion` | The launcher. Before every start it reads `hub.env` again and checks the hub (`channel/check.ts`): a wrong setting stops it with the reason, a hub that's down is waited for. Starts Claude Code with a startup prompt, relaunches after a crash (`--continue`), starts fresh after `bin/restart`. |
 | `bin/hub-watch` | Waits for the next hub message, prints it and exits. Run in the background, it wakes the session without the development-channels flag. |
 | `bin/idle-watch`, `bin/idle-check` | Restart the session when it has been idle for a while and the context is heavy, so it stays cheap and sharp. |
 | `bin/recall` | SessionStart hook: hands a new session the last journal digest and today's tail. |
 | `bin/task` | The task ledger: one Markdown file per open thread in `tasks/`, `NOW.md` generated from them. `task done` archives the hub thread with the same id. Python 3, standard library only. |
-| `bin/hub-env` | Loads `hub.env` for the other scripts (plain `KEY=value` lines, never `source`d). |
+| `bin/hub-env` | Loads `hub.env` for the other scripts (plain `KEY=value` lines, never `source`d). With a `hub.env`, every setting must be in it: no defaults. |
 | `bin/update` | Updates Bebop's files from the checkout, keeping yours (see Updating). |
 | `bin/restart` | Ends the session so `bin/companion` starts a fresh one (the `/new` command). |
 | `bin/presence` | Hook that shows "thinking" / "Running a command…" in the app. |

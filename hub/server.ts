@@ -18,6 +18,9 @@ import { runTranscriber } from './transcribe'
 import { createLock, type LockOptions } from './lock'
 import { loadTools, boardShim, instanceIdFor, toolUrls, OVERVIEW_PAGE, DESK, toolInstructions, superviseTools, type Tool, type SuperviseOptions } from './tools'
 
+/** A peer's name: letters and digits in any script, _ . and -; as web/term.js validPeer. */
+const PEER_NAME = /^[\p{L}\p{M}\p{N}_.-]{1,64}$/u
+
 export type HubOptions = {
   dataDir: string
   port?: number
@@ -840,7 +843,7 @@ export function createHub(opts: HubOptions) {
   function firstLine(thread: string): string | null {
     const r = db.query(`SELECT body_json FROM messages WHERE thread = ? AND sender = 'user' AND kind = 'text' ORDER BY id LIMIT 1`).get(thread) as { body_json: string } | null
     const text = r ? String(JSON.parse(r.body_json).text ?? '') : ''
-    const line = text.replace(/^@[\w.-]+ /, '').split('\n').map(l => l.trim()).find(Boolean)
+    const line = text.replace(/^@[\p{L}\p{M}\p{N}_.-]+ /u, '').split('\n').map(l => l.trim()).find(Boolean)
     return line ? (line.length > 60 ? `${line.slice(0, 59).trimEnd()}…` : line) : null
   }
   function threads() {
@@ -1089,6 +1092,16 @@ export function createHub(opts: HubOptions) {
   // ---------- presence: is the agent thinking or working right now ----------
   // Only the latest value is kept, in memory; after a restart the agent is idle.
   const PRESENCE_STATES = new Set(['idle', 'thinking', 'working'])
+  // Whether the agent is listening: an open agent stream (its watcher or channel). The app shows
+  // a banner when nothing has listened for a while (it decides how long; it has the clock).
+  const hubStarted = Date.now()
+  let lastListened: number | null = null
+  const listening = () => ({ listening: agentClients.size > 0, last: lastListened, started: hubStarted })
+  function listeningChanged() {
+    lastListened = Date.now()
+    broadcastUser('listening', listening())
+  }
+
   const presenceTtl = opts.presenceTtlMs ?? 10 * 60 * 1000
   let presence: { state: string; detail: string | null; thread: string | null; updated: number } = { state: 'idle', detail: null, thread: null, updated: Date.now() }
   let presenceTimer: ReturnType<typeof setTimeout> | undefined
@@ -1187,17 +1200,25 @@ export function createHub(opts: HubOptions) {
     const iconOf = await Promise.all(list.map((p: any) => icons.resolve(str(p?.path, 500))))
     const ins = db.query('INSERT OR REPLACE INTO peers (name, kind, state, detail, project, path, icon, pos) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     let n = 0
+    // A name the app can't address is refused, and said so: `rejected` lists each with why.
+    const rejected: { name: string; reason: string }[] = []
+    const seen = new Set<string>()
     db.transaction(() => {
       db.exec('DELETE FROM peers')
       list.forEach((p: any, i: number) => {
-        const name = typeof p?.name === 'string' ? p.name.replace(/^@/, '').trim() : ''
-        if (!/^[\w.-]{1,64}$/.test(name)) return
+        const raw = typeof p?.name === 'string' ? p.name : ''
+        const name = raw.replace(/^@/, '').trim().normalize('NFC')
+        const why = !name ? 'no name' : name.length > 64 ? 'longer than 64 characters'
+          : !PEER_NAME.test(name) ? 'only letters, digits, _ . and - (no spaces)' : seen.has(name) ? 'listed twice' : null
+        if (why) { rejected.push({ name: raw.slice(0, 80), reason: why }); return }
+        seen.add(name)
         ins.run(name, str(p.kind, 40), str(p.state, 40), str(p.detail, 300), str(p.project, 100), str(p.path, 500), iconOf[i], i); n++
       })
       db.query('INSERT OR REPLACE INTO lists_meta (name, updated) VALUES (?, ?)').run('peers', updated)
     })()
     broadcastUser('peers', peers())
-    return json({ ok: true, count: n })
+    if (rejected.length) log(`hub: set_peers refused ${rejected.map(r => `"${r.name}" (${r.reason})`).join(', ')}`)
+    return json({ ok: true, count: n, rejected })
   }
 
   // Background tasks the agent has running (helpers, builds, waiting on a peer).
@@ -1490,8 +1511,18 @@ export function createHub(opts: HubOptions) {
           return sseStream(server, req, c => {
             const sent = new Set<number>()
             agentClients.set(c, sent)
+            listeningChanged()
             for (const r of q.undelivered.all() as MessageRow[]) { sent.add(r.id); c.send('message', forAgent(r), r.id) }
-          }, c => { agentClients.delete(c) })
+          }, c => { if (agentClients.delete(c)) listeningChanged() })
+        }
+        // A health check (channel/check.ts): a probe goes to every open agent stream and is
+        // neither stored nor shown in the app. The watcher ignores it (it isn't a message).
+        if (method === 'POST' && path === '/agent/probe') {
+          const b = await req.json().catch(() => null) as { nonce?: unknown } | null
+          const nonce = typeof b?.nonce === 'string' ? b.nonce.slice(0, 64) : ''
+          if (!nonce) return err(400, 'nonce required')
+          for (const c of agentClients.keys()) c.send('probe', { nonce })
+          return json({ ok: true, listeners: agentClients.size })
         }
         if (method === 'POST' && path === '/agent/ack') {
           const b = await req.json().catch(() => null) as { ids?: unknown } | null
@@ -1563,6 +1594,7 @@ export function createHub(opts: HubOptions) {
         const ic = /^\/api\/icons\/([^/]{1,64})$/.exec(path)
         if (method === 'GET' && ic) return iconFile(ic[1])
         if (method === 'GET' && path === '/api/presence') return json(presence)
+        if (method === 'GET' && path === '/api/listening') return json(listening())
         if (method === 'GET' && path === '/api/tasks') return json(tasks())
         if (method === 'POST' && path === '/api/read') {
           const b = await req.json().catch(() => null) as { thread?: string | null; last_id?: number } | null

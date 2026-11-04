@@ -360,8 +360,10 @@ export const projectOfThread = id => id?.startsWith(PROJECT_THREAD) ? id.slice(P
 /** A further conversation in the same project: `project-<key>~<stamp>`. */
 export const newProjectThread = key => `${projectThread(key)}~${Date.now().toString(36)}`
 /** The names the hub accepts for a peer, so the only ones the relay can address. */
-export const validPeer = name => /^[\w.-]{1,64}$/.test(name ?? '')
+/** Letters and digits in any script (Zoë, Renée, 日本), plus _ . and -; no spaces. NFC, so Zoë typed two ways is one name. */
+export const PEER_NAME = /^[\p{L}\p{M}\p{N}_.-]{1,64}$/u
+export const validPeer = name => PEER_NAME.test((name ?? '').normalize('NFC'))
 /** The text the agent gets: `@peer …`, the relay's own syntax. Already addressed text stays. */
 export const addressed = (text, peer) => text.startsWith(`@${peer} `) ? text : `@${peer} ${text}`
 /** The text as it was typed, for the bubble. */
-export const unaddressed = text => text.replace(/^@[\w.-]+ /, '')
+export const unaddressed = text => text.replace(/^@[\p{L}\p{M}\p{N}_.-]+ /u, '')
