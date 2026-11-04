@@ -1,0 +1,4 @@
+#!/bin/zsh
+# Hook entry for the hub's presence script (thinking / working / idle in the app).
+hub=${HUB_HOME:-${0:A:h:h:h:h}}
+exec bun "$hub/scripts/presence.ts" "$@"

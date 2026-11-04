@@ -1,0 +1,25 @@
+{
+  "name": "bebop",
+  "version": "0.0.1",
+  "description": "Bebop: a phone-first client and message system for your own Claude Code session.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "funclosure",
+  "scripts": {
+    "hub": "bun hub/main.ts",
+    "test": "bun test",
+    "postinstall": "bun scripts/vendor.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@simplewebauthn/server": "13",
+    "dompurify": "^3.4.17",
+    "marked": "^18.1.1",
+    "web-push": "^3.6.7",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

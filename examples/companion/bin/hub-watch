@@ -1,0 +1,9 @@
+#!/bin/zsh
+# Run in the background by the companion (Bash run_in_background) instead of
+# loading the hub as a development channel, which prompts on every launch.
+# Waits for the next message(s) from the hub app, prints them as <channel>
+# tags and exits, which wakes the session. Start it again after each wake.
+hub=${HUB_HOME:-${0:A:h:h:h:h}}
+export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}
+export HUB_TOKEN_FILE=${HUB_TOKEN_FILE:-$hub/data/agent.token}
+exec bun "$hub/channel/watch.ts"

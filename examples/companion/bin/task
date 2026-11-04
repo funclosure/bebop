@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""The companion's task ledger: one file per open thread in tasks/, NOW.md generated from them.
+
+  task new <id> "<title>" [--waiting W] [--owner O] [--project P] [--ref R] [--next N] [--body B]
+  task log <id> "<what happened>" [--ref R] [--next N]
+  task set <id> key=value ...          (state, waiting, owner, project, ref, next, title)
+  task done <id> "<outcome>"           (logs it, moves the file to tasks/done/, notes it in today's journal,
+                                        archives the app thread with the same id)
+  task show <id>
+  task list [--all]
+  task now                             (regenerate NOW.md; every change does this too)
+
+A task file is plain Markdown with a small header, readable by any engine:
+
+  ---
+  title: App 1.2 in beta review
+  state: waiting          # open | waiting | done
+  waiting: user           # who or what it waits on: user, a session name, a vendor, a date…
+  owner: app-session      # the session doing the work, if not the companion
+  project: my-app         # optional: the project folder's name, same as its peer's project
+  ref: 412                # hub message ids, PR numbers…
+  next: the user adds build 55 to the beta group
+  opened: 2026-10-19
+  updated: 2026-10-20
+  ---
+  Context in prose.
+
+  ## Log
+  - 2026-10-19: build 55 processed; told the user (412)
+
+Write the step to the task *before* replying, so a restart finds exactly what is in flight.
+Standard library only, no engine-specific calls.
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+HOME = pathlib.Path(__file__).resolve().parent.parent
+TASKS = HOME / "tasks"
+DONE = TASKS / "done"
+NOW = HOME / "NOW.md"
+JOURNAL = HOME / "journal"
+HUB = os.environ.get("HUB_URL", "http://127.0.0.1:8787")
+HUB_TOKEN = pathlib.Path(os.environ.get("HUB_TOKEN_FILE") or
+                         pathlib.Path(os.environ.get("HUB_HOME") or HOME.parent.parent) / "data/agent.token")
+FIELDS = ["title", "state", "waiting", "owner", "project", "ref", "next", "opened", "updated"]
+STATES = {"open", "waiting", "done"}
+
+
+def today():
+    return dt.date.today().isoformat()
+
+
+def path(tid):
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.\-]*", tid):
+        sys.exit(f"task: id '{tid}' should be lowercase kebab-case")
+    return TASKS / f"{tid}.md"
+
+
+def read(p):
+    text = p.read_text()
+    m = re.match(r"---\n(.*?)\n---\n?(.*)", text, re.S)
+    if not m:
+        sys.exit(f"task: {p.name} has no header")
+    meta = {}
+    for line in m.group(1).splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.split("  #")[0].strip()
+    return meta, m.group(2)
+
+
+def write(p, meta, body):
+    head = "\n".join(f"{k}: {meta[k]}" for k in FIELDS if meta.get(k))
+    extra = "\n".join(f"{k}: {v}" for k, v in meta.items() if k not in FIELDS and v)
+    p.write_text(f"---\n{head}{chr(10) + extra if extra else ''}\n---\n{body.lstrip(chr(10))}")
+
+
+def load(tid):
+    p = path(tid)
+    if not p.exists():
+        sys.exit(f"task: no open task '{tid}' (see `task list`)")
+    return p, *read(p)
+
+
+def append_log(body, line):
+    if "## Log" not in body:
+        body = body.rstrip() + "\n\n## Log\n"
+    return body.rstrip() + f"\n- {today()}: {line}\n"
+
+
+def open_tasks():
+    out = []
+    for p in sorted(TASKS.glob("*.md")):
+        meta, body = read(p)
+        out.append((p.stem, meta, body))
+    return out
+
+
+def lane(m):
+    w = m.get("waiting", "")
+    return "user" if w.lower() == "user" else "others" if m.get("state") == "waiting" and w else "mine"
+
+
+def log_lines(body):
+    """The task's log entries, without the list marker."""
+    return [l[2:] for l in body.splitlines() if l.startswith("- ")]
+
+
+def sync_topics(tasks):
+    """Publish the open tasks to the app's topic list. Fire and forget, like archive_thread."""
+    names = {"user": "you", "others": "others", "mine": "mine"}
+    topics = [{"id": tid, "title": m.get("title", tid), "lane": names[lane(m)], "detail": m.get("next", ""),
+               "project": m.get("project", ""), "updated": m.get("updated", ""), "history": log_lines(body)}
+              for tid, m, body in tasks]
+    try:
+        token = HUB_TOKEN.read_text().strip()
+        p = subprocess.Popen(
+            ["curl", "-fsS", "-m", "3", "-o", "/dev/null", "-H", f"Authorization: Bearer {token}",
+             "-H", "Content-Type: application/json", "-X", "POST", "--data-binary", "@-", f"{HUB}/agent/topics"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        p.stdin.write(json.dumps(topics).encode())
+        p.stdin.close()
+    except Exception:
+        pass
+
+
+def regenerate_now():
+    tasks = open_tasks()
+    groups = {"user": [], "others": [], "mine": []}
+    for tid, m, _ in tasks:
+        groups[lane(m)].append((tid, m))
+
+    def line(tid, m, show_waiting=False):
+        bits = [f"**{m.get('title', tid)}**"]
+        if m.get("next"):
+            bits.append(m["next"])
+        tail = []
+        if show_waiting and m.get("waiting"):
+            tail.append(f"on {m['waiting']}")
+        if m.get("owner"):
+            tail.append(m["owner"])
+        if m.get("ref"):
+            tail.append(m["ref"])
+        tail.append(f"`{tid}`, {m.get('updated', '?')}")
+        return f"- {' — '.join(bits)} ({'; '.join(tail)})"
+
+    def newest_first(items):
+        return sorted(items, key=lambda x: x[1].get("updated", ""), reverse=True)
+
+    parts = [
+        "# Now",
+        "",
+        "Generated by `bin/task` from `tasks/` — don't edit by hand. One line per open thread; details and history in `tasks/<id>.md`.",
+        "",
+    ]
+    for title, key, show in [("Waiting on the user", "user", False),
+                             ("Waiting on others", "others", True),
+                             ("Mine, in progress", "mine", False)]:
+        parts.append(f"## {title}")
+        items = newest_first(groups[key])
+        parts += [line(t, m, show) for t, m in items] or ["- (none)"]
+        parts.append("")
+    NOW.write_text("\n".join(parts))
+    sync_topics(tasks)
+
+
+def journal_note(text):
+    JOURNAL.mkdir(exist_ok=True)
+    f = JOURNAL / f"{today()}.md"
+    if not f.exists():
+        f.write_text(f"# {today()}\n")
+    with f.open("a") as fh:
+        fh.write(f"- {text}\n")
+
+
+def archive_thread(tid):
+    """Archive the hub thread named after the task. Fire and forget: never fails
+    or slows `task done`, whether or not the hub is up (a new message un-archives it)."""
+    try:
+        token = HUB_TOKEN.read_text().strip()
+        subprocess.Popen(
+            ["curl", "-fsS", "-m", "3", "-o", "/dev/null", "-H", f"Authorization: Bearer {token}",
+             "-H", "Content-Type: application/json", "-X", "POST", "-d", '{"state":"archived"}',
+             f"{HUB}/agent/threads/{tid}"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except Exception:
+        pass
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="task", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    n = sub.add_parser("new"); n.add_argument("id"); n.add_argument("title")
+    for a in ("waiting", "owner", "project", "ref", "next", "body"):
+        n.add_argument(f"--{a}", default="")
+    lg = sub.add_parser("log"); lg.add_argument("id"); lg.add_argument("text")
+    lg.add_argument("--ref", default=""); lg.add_argument("--next", default=None)
+    st = sub.add_parser("set"); st.add_argument("id"); st.add_argument("pairs", nargs="+")
+    dn = sub.add_parser("done"); dn.add_argument("id"); dn.add_argument("outcome")
+    sh = sub.add_parser("show"); sh.add_argument("id")
+    ls = sub.add_parser("list"); ls.add_argument("--all", action="store_true")
+    sub.add_parser("now")
+    a = ap.parse_args()
+    TASKS.mkdir(exist_ok=True)
+
+    if a.cmd == "new":
+        p = path(a.id)
+        if p.exists():
+            sys.exit(f"task: '{a.id}' already exists; use `task log`")
+        meta = {"title": a.title, "state": "waiting" if a.waiting else "open", "waiting": a.waiting,
+                "owner": a.owner, "project": a.project, "ref": a.ref, "next": a.next, "opened": today(), "updated": today()}
+        write(p, meta, (a.body.strip() + "\n\n" if a.body else "") + "## Log\n" + f"- {today()}: opened\n")
+    elif a.cmd == "log":
+        p, meta, body = load(a.id)
+        if a.ref:
+            meta["ref"] = ", ".join(x for x in (meta.get("ref"), a.ref) if x)
+        if a.next is not None:
+            meta["next"] = a.next
+        meta["updated"] = today()
+        write(p, meta, append_log(body, a.text + (f" ({a.ref})" if a.ref else "")))
+    elif a.cmd == "set":
+        p, meta, body = load(a.id)
+        for pair in a.pairs:
+            if "=" not in pair:
+                sys.exit(f"task: expected key=value, got '{pair}'")
+            k, v = pair.split("=", 1)
+            if k == "state" and v not in STATES:
+                sys.exit(f"task: state must be one of {sorted(STATES)}")
+            meta[k] = v
+        if meta.get("state") != "done":
+            meta["state"] = "waiting" if meta.get("waiting") else "open"
+        meta["updated"] = today()
+        write(p, meta, body)
+    elif a.cmd == "done":
+        p, meta, body = load(a.id)
+        meta.update(state="done", waiting="", next="", updated=today())
+        DONE.mkdir(exist_ok=True)
+        write(DONE / p.name, meta, append_log(body, f"done: {a.outcome}"))
+        p.unlink()
+        journal_note(f"Closed `{a.id}` ({meta.get('title', '')}): {a.outcome}")
+        archive_thread(a.id)
+    elif a.cmd == "show":
+        print(load(a.id)[0].read_text())
+        return
+    elif a.cmd == "list":
+        for tid, m, _ in open_tasks():
+            print(f"{tid:32} {m.get('state', ''):8} {m.get('waiting', '') or '-':14} {m.get('title', '')}")
+        if a.all and DONE.exists():
+            for p in sorted(DONE.glob("*.md")):
+                print(f"{p.stem:32} done     -              {read(p)[0].get('title', '')}")
+        return
+    regenerate_now()
+
+
+if __name__ == "__main__":
+    main()

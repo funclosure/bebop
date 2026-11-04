@@ -1,0 +1,8 @@
+#!/bin/zsh
+# Run in the background by the companion at startup (Bash run_in_background).
+# Checks bin/idle-check every 2 min without touching the session, and exits,
+# which wakes the session, only once it says restart. Costs no tokens while it waits.
+home=${0:A:h:h}
+while sleep 120; do
+  "$home/bin/idle-check" && exit 0
+done

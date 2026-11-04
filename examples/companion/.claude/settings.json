@@ -1,0 +1,28 @@
+{
+  "autoMemoryEnabled": false,
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(date:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume|clear|compact", "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/bin/recall" }] }
+    ],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/bin/presence --hook", "timeout": 3 }] }],
+    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/bin/presence --hook", "timeout": 3 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/bin/presence --hook", "timeout": 3 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/bin/presence --hook", "timeout": 3 }] }]
+  },
+  "enabledMcpjsonServers": ["hub"]
+}

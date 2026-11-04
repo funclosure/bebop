@@ -1,0 +1,28 @@
+#!/bin/zsh
+# SessionStart hook: tell a new session what was in progress, cheaply.
+#   - the most recent earlier day: its last "## Digest" block (heading up to the first blank line) (else its last 25 lines)
+#   - today: the last 25 lines
+# NOW.md is loaded through CLAUDE.md; anything older is a grep away in journal/.
+home=${0:A:h:h}
+today=$home/journal/$(date +%F).md
+earlier=("$home"/journal/*.md(N.On))
+earlier=(${earlier:#$today})
+
+# Print the last "## Digest" block of $1, or nothing.
+digest() {
+  awk '/^## Digest/ {buf=""; on=1} on && (/^$/ || (/^## / && !/^## Digest/)) {on=0} on {buf=buf $0 "\n"} END {printf "%s", buf}' "$1"
+}
+
+if (( ${#earlier} )); then
+  f=$earlier[1]
+  d=$(digest "$f")
+  echo "## journal/${f:t} (${d:+digest}${d:-last 25 lines})"
+  if [[ -n $d ]]; then print -r -- "$d"; else tail -n 25 "$f"; fi
+  echo
+fi
+if [[ -f $today ]]; then
+  echo "## journal/${today:t} (last 25 lines)"
+  tail -n 25 "$today"
+  echo
+fi
+echo "Older days: grep journal/. Startup duty: start bin/hub-watch and bin/idle-watch in the background (CLAUDE.md)."

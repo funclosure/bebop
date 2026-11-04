@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>{{NAME}}</title>
+  <meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#171716" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="{{NAME}}">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/favicon-64.png" sizes="64x64" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div class="col-resize" id="side-col-resize" role="separator" aria-orientation="vertical" tabindex="0"></div>
+  <aside class="side" id="side" aria-label="Projects">
+    <div class="side-pins" id="side-pins"></div>
+    <nav class="side-topics" id="side-topics"></nav>
+    <button class="side-settings" id="side-settings" type="button"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><circle cx="16" cy="7" r="2" stroke="currentColor" stroke-width="1.8" fill="none"/><circle cx="8" cy="17" r="2" stroke="currentColor" stroke-width="1.8" fill="none"/></svg><span id="side-settings-label"></span></button>
+  </aside>
+  <div id="app" data-name="{{NAME}}">
+    <header class="top">
+      <div class="bar">
+        <div class="title-row">
+          <h1 class="title"><button class="title-btn" id="title-btn" type="button" aria-haspopup="dialog" aria-label="Settings"><img class="title-icon" src="icons/mark.svg" width="24" height="24" alt="">{{NAME}}<span class="conn" id="conn" title=""></span></button></h1>
+          <button class="tasks-chip" id="tasks-chip" type="button" aria-haspopup="dialog" hidden><span class="tasks-spin" aria-hidden="true"></span><span id="tasks-count"></span></button>
+        </div>
+        <div class="bar-actions">
+          <button class="icon-btn" id="search-btn" type="button" aria-label="Search">
+            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m15 15 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+          </button>
+          <button class="icon-btn" id="panes-btn" type="button" aria-label="Sessions" hidden>
+            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+            <span class="badge-dot" id="panes-dot" hidden></span>
+          </button>
+          <button class="icon-btn" id="peers-btn" type="button" aria-label="Peers" aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><circle cx="16.5" cy="9" r="2.6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M16 14c2.5 0 4.1 1.6 4.6 4.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>
+            <span class="badge-dot" id="peers-dot" hidden></span>
+          </button>
+        </div>
+      </div>
+      <nav class="threads" id="threads" aria-label="Threads"></nav>
+      <div class="context" id="context" hidden></div>
+    </header>
+
+    <main class="list" id="list" aria-live="polite">
+      <div class="older" id="older"></div>
+      <div class="messages" id="messages"></div>
+      <div class="empty" id="empty" hidden></div>
+      <div class="msg agent typing" id="typing" hidden aria-live="polite">
+        <div class="bubble typing-bubble"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="typing-detail" id="typing-detail"></span></div>
+      </div>
+      <div class="newer" id="newer"></div>
+    </main>
+
+    <section class="home" id="home" hidden></section>
+    <div class="col-resize" id="home-col-resize" role="separator" aria-orientation="vertical" tabindex="0"></div>
+    <div class="home-blank" id="home-blank" hidden></div>
+
+    <div class="floating">
+      <button class="pill" id="waiting-pill" type="button" hidden></button>
+      <button class="pill" id="new-pill" type="button" hidden></button>
+    </div>
+
+    <div class="now-bar player" id="now-bar" hidden>
+      <button class="now-skip" id="now-back" type="button" aria-label="Back 15 seconds"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M12 4.5a8 8 0 1 1-7.4 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 1.5v6l-4-3z" fill="currentColor"/><text x="12" y="16" text-anchor="middle" font-size="8.5" font-weight="600" fill="currentColor">15</text></svg></button>
+      <button class="ap-play" id="now-play" type="button"></button>
+      <button class="now-skip" id="now-forward" type="button" aria-label="Forward 15 seconds"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M12 4.5a8 8 0 1 0 7.4 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 1.5v6l4-3z" fill="currentColor"/><text x="12" y="16" text-anchor="middle" font-size="8.5" font-weight="600" fill="currentColor">15</text></svg></button>
+      <div class="now-mid">
+        <div class="now-top">
+          <button class="now-title" id="now-title" type="button"></button>
+          <span class="ap-time" id="now-time"></span>
+        </div>
+        <input class="ap-bar" id="now-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
+      </div>
+      <button class="icon-btn small" id="now-close" type="button" aria-label="Close player">✕</button>
+    </div>
+
+
+    <footer class="composer" id="composer">
+      <ul class="suggest" id="suggest" role="listbox" hidden></ul>
+      <div class="reply-strip" id="reply-strip" hidden>
+        <div class="reply-text" id="reply-text"></div>
+        <button class="icon-btn small" id="reply-cancel" type="button" aria-label="Cancel reply">✕</button>
+      </div>
+      <div class="dict-strip" id="dict-strip" hidden>
+        <span class="dict-status" id="dict-status"></span>
+        <div class="dict-toggle" id="dict-toggle" role="group" aria-label="Dictation text" hidden>
+          <button type="button" data-mode="refined" aria-pressed="true">✨ Refined</button>
+          <button type="button" data-mode="raw" aria-pressed="false">Raw</button>
+        </div>
+      </div>
+      <div class="attachments" id="attachments" hidden></div>
+      <form class="compose-row" id="compose-form">
+        <label class="icon-btn attach" aria-label="Attach files">
+          <input type="file" id="file-input" multiple hidden>
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+        </label>
+        <textarea id="input" rows="1" autocomplete="off" autocorrect="on" spellcheck="true" enterkeyhint="enter"></textarea>
+        <button class="send" id="send" type="submit" aria-label="Send" disabled>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+        </button>
+        <button class="send mic" id="mic" type="button" aria-label="Record a voice note" hidden>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M6 11.5a6 6 0 0 0 12 0M12 17.5V21" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+        </button>
+      </form>
+      <div class="rec-row" id="rec" hidden>
+        <button class="icon-btn" id="rec-cancel" type="button" aria-label="Cancel recording">✕</button>
+        <div class="rec-status">
+          <span class="rec-dot" aria-hidden="true"></span>
+          <span class="rec-time" id="rec-time">0:00</span>
+          <div class="rec-level" id="rec-level" aria-hidden="true"></div>
+        </div>
+        <button class="icon-btn rec-refine" id="rec-refine" type="button" aria-label="Stop and turn into a prompt to review" hidden>✨</button>
+        <button class="send" id="rec-send" type="button" aria-label="Stop and send">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+        </button>
+      </div>
+    </footer>
+
+    <!-- Search: a full view inside #app (not a sheet), so it follows the visual viewport
+         when the keyboard opens. -->
+    <section class="search-view" id="search" role="dialog" aria-label="Search" hidden>
+      <div class="search-top">
+        <form class="search-row" id="search-form" role="search">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m15 15 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>
+          <input id="search-input" type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" spellcheck="false">
+        </form>
+        <button class="text-btn" id="search-cancel" type="button">Cancel</button>
+      </div>
+      <div class="search-scope" id="search-types"></div>
+      <div class="search-body" id="search-body">
+        <div class="search-status" id="search-status"></div>
+        <ul class="search-results" id="search-results"></ul>
+        <button class="pill-btn search-more" id="search-more" type="button" hidden></button>
+      </div>
+    </section>
+
+    <!-- Panes: agent sessions in the terminal multiplexer. A full view like search: the list,
+         or one pane's screen with a key bar and a prompt line that follow the keyboard. -->
+    <section class="search-view panes-view" id="panes" role="dialog" aria-labelledby="panes-title" hidden>
+      <div class="panes-top">
+        <!-- The title only names the session: "Switch session" under it opens the picker. -->
+        <div class="panes-heading" id="panes-heading">
+          <h2><span id="panes-title"></span></h2>
+          <div class="sheet-sub" id="panes-sub"></div>
+        </div>
+        <button class="text-btn" id="panes-close" type="button"></button>
+      </div>
+      <div class="search-body" id="panes-list-body">
+        <div class="search-status" id="panes-status"></div>
+        <ul class="peer-list pane-list" id="pane-list"></ul>
+      </div>
+      <div class="pane-screen" id="pane-screen" hidden>
+        <!-- The fleet at a glance; tap to switch to another session (or swipe the header). -->
+        <button class="pane-fleet" id="pane-fleet" type="button" aria-haspopup="dialog"></button>
+        <div class="pane-text" id="pane-text" tabindex="0" role="log"><div class="pane-lines" id="pane-lines"></div></div>
+        <!-- A question or permission dialog on the screen, as a card (web/dialog.js). -->
+        <div class="pane-dialog" id="pane-dialog" hidden></div>
+        <!-- Raw keys: hidden until toggled, or shown when a dialog can't be read as a card. -->
+        <div class="pane-keys" id="pane-keys" hidden></div>
+        <!-- Dictation: speech → refined prompt in the line below, to review before sending. -->
+        <div class="dict-strip pane-dict" id="pane-dict" hidden>
+          <span class="dict-status" id="pane-dict-status"></span>
+          <div class="dict-toggle" id="pane-dict-toggle" role="group" aria-label="Dictation text" hidden>
+            <button type="button" data-mode="refined" aria-pressed="true">✨ Refined</button>
+            <button type="button" data-mode="raw" aria-pressed="false">Raw</button>
+          </div>
+        </div>
+        <form class="pane-prompt" id="pane-prompt-form">
+          <button class="pane-keys-btn" id="pane-keys-btn" type="button" aria-label="Keys" aria-pressed="false" aria-controls="pane-keys">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M7 10h.01M10 10h.01M13 10h.01M16 10h.01M7.5 14h9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+          <textarea id="pane-prompt" rows="1" enterkeyhint="enter" autocomplete="off" autocorrect="on" spellcheck="true" maxlength="4000"></textarea>
+          <button class="send" id="pane-send" type="submit" aria-label="Send to the session" disabled>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+          </button>
+          <button class="send mic" id="pane-mic" type="button" aria-label="Dictate a prompt" hidden>
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M6 11.5a6 6 0 0 0 12 0M12 17.5V21" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
+          </button>
+        </form>
+        <div class="rec-row pane-rec" id="pane-rec" hidden>
+          <button class="icon-btn" id="pane-rec-cancel" type="button" aria-label="Cancel recording">✕</button>
+          <div class="rec-status">
+            <span class="rec-dot" aria-hidden="true"></span>
+            <span class="rec-time" id="pane-rec-time">0:00</span>
+            <div class="rec-level" id="pane-rec-level" aria-hidden="true"></div>
+          </div>
+          <button class="send rec-refine" id="pane-rec-done" type="button" aria-label="Stop and turn into a prompt to review">✨</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- A topic's board (Board, the whiteboard), embedded: a column beside the conversation on
+       wide windows, a full-screen sheet on the phone. See "board" in app.js. -->
+  <div class="col-resize" id="board-col-resize" role="separator" aria-orientation="vertical" tabindex="0"></div>
+  <section class="board-col" id="board" role="region" aria-labelledby="board-title" hidden>
+    <div class="board-head">
+      <div class="board-heading">
+        <h2 id="board-title"></h2>
+        <div class="board-status" id="board-status" aria-live="polite"></div>
+      </div>
+      <a class="text-btn board-open" id="board-open" target="_blank" rel="noopener"></a>
+      <button class="icon-btn small" id="board-close" type="button">✕</button>
+    </div>
+    <div class="board-frame" id="board-frame"></div>
+  </section>
+
+  <div class="viewer" id="viewer" hidden>
+    <div class="viewer-stage" id="viewer-stage"><img id="viewer-img" alt=""></div>
+    <button class="viewer-btn close" id="viewer-close" type="button" aria-label="Close">✕</button>
+    <button class="viewer-btn prev" id="viewer-prev" type="button" aria-label="Previous">‹</button>
+    <button class="viewer-btn next" id="viewer-next" type="button" aria-label="Next">›</button>
+    <a class="viewer-btn open" id="viewer-open" target="_blank" rel="noopener" aria-label="Open original">↗</a>
+    <a class="viewer-btn save" id="viewer-save" download aria-label="Save"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 4v11m-5-5 5 5 5-5M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+  </div>
+
+  <!-- Bottom sheets: see "sheets" in app.js. The grabber and head drag the sheet;
+       .sheet-body scrolls and drags only when scrolled to the top. -->
+  <div class="sheet-backdrop" id="sheet" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Message actions" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-emojis" id="sheet-emojis"></div>
+      <div class="sheet-actions" id="sheet-actions"></div>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="peers-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="peers-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="peers-title">Peers</h2>
+          <div class="sheet-sub" id="peers-updated"></div>
+        </div>
+        <button class="pill-btn" id="peers-refresh" type="button">Refresh</button>
+      </div>
+      <ul class="sheet-body peer-list" id="peer-list"></ul>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="pane-pick-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="pane-pick-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="pane-pick-title">Sessions</h2>
+          <div class="sheet-sub" id="pane-pick-sub"></div>
+        </div>
+      </div>
+      <ul class="sheet-body peer-list pane-list" id="pane-pick-list"></ul>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="settings-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="settings-title">Settings</h2>
+        </div>
+      </div>
+      <div class="sheet-body settings" id="settings-body"></div>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="tasks-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="tasks-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="tasks-title">Background</h2>
+          <div class="sheet-sub" id="tasks-updated"></div>
+        </div>
+      </div>
+      <ul class="sheet-body peer-list" id="task-list"></ul>
+    </div>
+  </div>
+
+  <!-- Text attachments (Markdown rendered, other text as-is), read in place instead of iOS Quick Look. -->
+  <div class="sheet-backdrop" id="doc-sheet" hidden>
+    <div class="sheet tall full" role="dialog" aria-modal="true" aria-labelledby="doc-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div class="doc-head-text">
+          <h2 id="doc-title"></h2>
+          <div class="sheet-sub" id="doc-sub"></div>
+        </div>
+        <a class="pill-btn small" id="doc-download" download>Download</a>
+      </div>
+      <div class="sheet-body doc-body" id="doc-body"></div>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="topics-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="topics-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head"><h2 id="topics-title"></h2><button class="text-btn" id="topics-back" type="button" hidden></button></div>
+      <nav class="sheet-body topics-list" id="topics-list"></nav>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="archived-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="archived-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="archived-title">Archived</h2>
+          <div class="sheet-sub" id="archived-sub"></div>
+        </div>
+      </div>
+      <ul class="sheet-body peer-list" id="archived-list"></ul>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="scope-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="scope-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div><h2 id="scope-title">Search in</h2></div>
+      </div>
+      <ul class="sheet-body peer-list" id="scope-list"></ul>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <div class="lock-screen" id="lock-screen" hidden>
+    <img src="icons/icon.svg" width="72" height="72" alt="">
+    <h2 id="lock-title"></h2>
+    <button class="lock-unlock" id="lock-unlock" type="button"></button>
+    <p class="lock-error" id="lock-error" aria-live="polite"></p>
+  </div>
+</body>
+</html>

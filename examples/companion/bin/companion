@@ -1,0 +1,60 @@
+#!/bin/zsh
+# Start the companion from its folder. Run it in its own terminal pane (tmux, herdr, …).
+#   companion            resume the last conversation (or start one)
+#   companion --fresh    start a clean conversation; identity reloads from files
+# The loop keeps the companion up:
+#   - `bin/restart` (the user's /new, or the companion's own idle restart) → a fresh session.
+#   - Any other exit (crash, /exit) → relaunch with --continue after 10 s; Ctrl-C
+#     during the countdown stops the loop. Two quick exits in a row → --fresh;
+#     three → stop.
+# Env: HUB_HOME (the Bebop checkout; default: the repo this folder sits in),
+#      COMPANION_CHANNELS (optional, e.g. plugin:telegram@claude-plugins-official).
+set -u
+home=${0:A:h:h}
+cd "$home" || exit 1
+export HUB_HOME=${HUB_HOME:-${home:h:h}}
+export COMPANION_LOOP=1
+channels=${COMPANION_CHANNELS-}
+quick=60        # a session shorter than this (seconds) counts as a quick exit
+
+fresh=${1:-}
+quick_exits=0
+rm -f .restart
+while true; do
+  args=()
+  [[ -n $channels ]] && args+=(--channels $channels)
+  # Claude Code keeps transcripts under ~/.claude/projects/<path with / → ->
+  transcripts=~/.claude/projects/${home//\//-}
+  existing=("$transcripts"/*.jsonl(N))
+  if [[ $fresh != --fresh ]] && (( ${#existing} )); then
+    args=(--continue "${args[@]}")
+  fi
+  # A first prompt, so the session runs its startup duties instead of sitting at an
+  # empty prompt (the hub only reaches it once bin/hub-watch is running). It goes
+  # first: --channels takes a list and would swallow a trailing argument.
+  startup=("Startup (launched by bin/companion): start bin/hub-watch and bin/idle-watch in the background, publish set_commands and set_peers, check NOW.md and the recall digest for anything owed, then wait.")
+  started=$SECONDS
+  claude "${startup[@]}" "${args[@]}"
+  code=$?
+  fresh=
+  if [[ -f .restart ]]; then
+    rm -f .restart
+    quick_exits=0
+    fresh=--fresh
+    echo "companion: starting a fresh session…"
+    continue
+  fi
+  if (( SECONDS - started < quick )); then
+    (( quick_exits++ ))
+  else
+    quick_exits=0
+  fi
+  print "$(date '+%F %T') exit $code after $(( SECONDS - started ))s (quick exits: $quick_exits)" >> .exits.log
+  if (( quick_exits >= 3 )); then
+    echo "companion: exited quickly 3 times in a row; stopping. Check .exits.log." >&2
+    exit 1
+  fi
+  (( quick_exits == 2 )) && fresh=--fresh
+  echo "companion: session ended (exit $code). Relaunching in 10 s ${fresh:+(fresh) }— Ctrl-C to stop."
+  sleep 10 || exit 0
+done

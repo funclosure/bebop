@@ -1,0 +1,15 @@
+{
+  "name": "bebop-channel",
+  "version": "0.0.1",
+  "description": "Claude Code channel for Bebop.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": "./server.ts",
+  "scripts": {
+    "start": "bun install --no-summary 1>&2 && bun server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  }
+}

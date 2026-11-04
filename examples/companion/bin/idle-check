@@ -1,0 +1,27 @@
+#!/bin/zsh
+# Should the companion restart itself to shed context? Used by bin/idle-watch.
+# Prints e.g. "idle 42 min, context 3.1 MB → restart" and exits 0 for restart, 1 to stay.
+#   idle    = minutes since the last incoming message (the user, a peer session, a task notice)
+#   context = transcript bytes since the last compaction (crude: images count heavily)
+# Thresholds: COMPANION_IDLE_MIN (default 10), COMPANION_CONTEXT_MB (default 2).
+set -u
+home=${0:A:h:h}
+min_idle=${COMPANION_IDLE_MIN:-10}
+min_mb=${COMPANION_CONTEXT_MB:-2}
+transcripts=~/.claude/projects/${home//\//-}
+f=("$transcripts"/*.jsonl(N.om[1]))
+(( ${#f} )) || { echo "no transcript → stay"; exit 1; }
+f=$f[1]
+
+last_s=$(jq -r 'select(.type=="user" and (.message.content|type)=="string") | .timestamp | sub("\\.[0-9]+"; "") | fromdateiso8601' "$f" | tail -1)
+[[ -z $last_s ]] && { echo "no incoming message yet → stay"; exit 1; }
+idle=$(( ($(date +%s) - last_s) / 60 ))
+
+from=$(grep -n '"compact_boundary"' "$f" | tail -1 | cut -d: -f1)
+bytes=$(tail -n +${from:-1} "$f" | wc -c | tr -d ' ')
+mb=$(printf '%.1f' $(( bytes / 1048576.0 )))
+
+if (( idle >= min_idle && bytes >= min_mb * 1048576 )); then
+  echo "idle $idle min, context $mb MB → restart"; exit 0
+fi
+echo "idle $idle min, context $mb MB → stay"; exit 1

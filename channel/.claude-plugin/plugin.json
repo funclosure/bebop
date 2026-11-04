@@ -1,0 +1,6 @@
+{
+  "name": "hub",
+  "description": "Bebop channel for Claude Code: messages from the Bebop app arrive in the session; reply, ask, approve, progress and react go back.",
+  "version": "0.0.1",
+  "keywords": ["channel", "mcp", "messaging", "pwa"]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "bebop",
+  "owner": { "name": "bebop" },
+  "plugins": [
+    {
+      "name": "hub",
+      "source": "./channel",
+      "description": "Claude Code channel for Bebop."
+    }
+  ]
+}

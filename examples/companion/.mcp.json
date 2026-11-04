@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "hub": {
+      "command": "bun",
+      "args": ["${HUB_HOME}/channel/server.ts"],
+      "env": {
+        "MCP_PROTOCOL_NEGOTIATION": "legacy",
+        "HUB_INBOUND": "off",
+        "HUB_URL": "http://127.0.0.1:8787",
+        "HUB_TOKEN_FILE": "${HUB_HOME}/data/agent.token"
+      }
+    }
+  }
+}

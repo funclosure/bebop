@@ -1,0 +1,26 @@
+#!/bin/zsh
+# End this Claude Code session so bin/companion starts a fresh one (the user's /new).
+# Save the journal and tasks and send the reply BEFORE running this.
+set -u
+home=${0:A:h:h}
+
+if [[ ${COMPANION_LOOP:-} != 1 ]]; then
+  echo "restart: this session wasn't started by bin/companion, so nothing would relaunch it. Not restarting." >&2
+  exit 1
+fi
+
+# Walk up from this shell to the claude process that owns it.
+pid=$$
+while (( pid > 1 )); do
+  [[ $(ps -o comm= -p $pid) == claude ]] && break
+  pid=$(ps -o ppid= -p $pid | tr -d ' ')
+done
+if (( pid <= 1 )); then
+  echo "restart: couldn't find the claude process." >&2
+  exit 1
+fi
+
+touch "$home/.restart"
+# Give the tool call time to return before the session ends.
+nohup zsh -c "sleep 3; kill -TERM $pid" >/dev/null 2>&1 &!
+echo "restart: session $pid ends in 3s; bin/companion will start a fresh one."
