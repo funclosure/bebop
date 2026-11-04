@@ -45,6 +45,13 @@ TASKS = HOME / "tasks"
 DONE = TASKS / "done"
 NOW = HOME / "NOW.md"
 JOURNAL = HOME / "journal"
+# This folder's hub.env (written by /bebop:setup), if there: HUB_HOME, HUB_URL, HUB_TOKEN_FILE.
+_env = HOME / "hub.env"
+if _env.is_file():
+    for _line in _env.read_text().splitlines():
+        _k, _, _v = _line.partition("=")
+        if _k.strip() and not _k.lstrip().startswith("#") and _v:
+            os.environ[_k.strip()] = _v.split("#")[0].strip()
 HUB = os.environ.get("HUB_URL", "http://127.0.0.1:8787")
 HUB_TOKEN = pathlib.Path(os.environ.get("HUB_TOKEN_FILE") or
                          pathlib.Path(os.environ.get("HUB_HOME") or HOME.parent.parent) / "data/agent.token")

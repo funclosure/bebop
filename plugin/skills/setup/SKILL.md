@@ -26,6 +26,8 @@ Keep these values as you go; later steps use them: `CHECKOUT`, `NAME`, `SLUG`, `
 
 Run `pwd` and `ls -A`. This folder becomes the companion. It should be empty, or hold only `setup-notes.md` or `.claude/`. If it holds anything else, ask whether to go on here or stop so they can make a fresh folder (for example `mkdir ~/companions/sam && cd ~/companions/sam && claude`).
 
+Also check the folders above it for a `CLAUDE.md` (and say whether `~/.claude/CLAUDE.md` exists). Claude Code loads those into every session started here, so the companion would follow them too, and they color this setup. That can be fine, but say so, and suggest a folder outside their code tree (like `~/companions/<name>`) if they'd rather it start clean.
+
 ## 2. What's installed
 
 Check each one (`command -v …` and a version):
@@ -46,12 +48,13 @@ Ask where Bebop is checked out. If they don't have it, offer to clone it: `git c
 
 ## 4. Who the companion is
 
-Ask, in one or two AskUserQuestion rounds:
+Ask, in one or two AskUserQuestion rounds. Ask; don't fill in answers from what you've read in CLAUDE.md files or memory. This is about the companion they want, not a guess about them.
 
 1. The companion's name (`NAME`). Make `SLUG` from it: lowercase, letters, digits and dashes.
-2. Their own name and how to address them; their languages and time zone.
-3. What they mainly want help with (work, a job search, projects, life admin…), and where their project folders live (for example `~/code`). That folder becomes `HUB_ICON_ROOTS` and is where the companion may start new projects.
-4. Voice: brief and direct, warm and chatty, or formal. Anything it must never do.
+2. Their own name and how to address them, and their languages.
+3. Their time zone. Never guess it. Offer this machine's zone as the first option (`readlink /etc/localtime` on a Mac, `timedatectl` on Linux), and let them pick another.
+4. What they mainly want help with (work, a job search, projects, life admin…), and where their project folders live (for example `~/code`). That folder becomes `HUB_ICON_ROOTS` and is where the companion may start new projects.
+5. Voice: brief and direct, warm and chatty, or formal. Anything it must never do.
 
 ## 5. Hub settings
 
@@ -117,7 +120,7 @@ Then walk them through it on the phone, and wait until they say it's done:
 ## 8. Make this folder the companion
 
 1. Copy the template without overwriting anything: `rsync -a --ignore-existing CHECKOUT/examples/companion/ ./` (ask first).
-2. Write `hub.env` here. `bin/companion` reads it, so the companion talks to this hub:
+2. Write `hub.env` here. `bin/companion` and the other `bin/` scripts (the hooks too) read it, so the companion talks to this hub:
    ```
    HUB_HOME=CHECKOUT
    HUB_URL=http://127.0.0.1:PORT
@@ -125,7 +128,11 @@ Then walk them through it on the phone, and wait until they say it's done:
    ```
 3. Fill in `SOUL.md` from the interview: the name as the title, the voice under "How you talk", the never-do list under "Authority", and their main goals under "Current missions". Keep the "Your role: chief of staff" section. Fill in `USER.md`: name, languages, time zone, what they work on, where their projects live.
 4. `.claude/settings.json` already approves the `hub` MCP server (`enabledMcpjsonServers`), so they won't be asked about it.
-5. `git init && git add -A && git commit -m "NAME: first day"`. The companion commits its memory and journal here; nothing is pushed.
+5. Check that the companion's scripts find this hub through `hub.env`, even without its settings in the environment (hooks run that way):
+   - `echo '{}' | env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/presence --hook` prints nothing and exits 0.
+   - `env -u HUB_HOME -u HUB_URL -u HUB_TOKEN_FILE bin/task list` runs without an error.
+   If either fails, fix `hub.env` before going on.
+6. `git init && git add -A && git commit -m "NAME: first day"`. The companion commits its memory and journal here; nothing is pushed.
 
 ## 9. Start the companion
 

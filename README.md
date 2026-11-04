@@ -38,6 +38,8 @@ mkdir ~/companions/sam && cd ~/companions/sam && claude
 /bebop:setup
 ```
 
+When `/plugin install` asks for a scope, pick **local** (this folder only). Don't pick user scope: the setup skill would then load into every Claude Code session you start. Use a folder outside your code tree if you don't want the companion to pick up the `CLAUDE.md` files above it.
+
 It checks the tools, runs the hub as a background service, sets up the phone app over Tailscale, interviews you for the companion's persona, turns the folder into the companion, and starts it. A path works instead of `funclosure/bebop` for a local checkout.
 
 **By hand**: the sections below, in order: Requirements, Run it, Keep it running, Expose it on your tailnet, Lock, then `examples/companion/README.md` for the companion.

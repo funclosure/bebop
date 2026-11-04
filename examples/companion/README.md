@@ -18,7 +18,7 @@ The hub is the client and the message system; this folder is one way to build an
 | `bin/restart` | Ends the session so `bin/companion` starts a fresh one (the `/new` command). |
 | `bin/presence` | Hook that shows "thinking" / "Running a command…" in the app. |
 | `.mcp.json` | The hub's MCP server for sending (`reply`, `ask`, …); `HUB_INBOUND=off` because `bin/hub-watch` does the receiving. |
-| `hub.env` | (you write it) which checkout and hub this companion uses: `HUB_HOME`, `HUB_URL`, `HUB_TOKEN_FILE`. |
+| `hub.env` | (you write it) which checkout and hub this companion uses: `HUB_HOME`, `HUB_URL`, `HUB_TOKEN_FILE`. Every `bin/` script reads it, hooks included. |
 
 ## Set it up
 

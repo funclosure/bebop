@@ -3,6 +3,8 @@
 # loading the hub as a development channel, which prompts on every launch.
 # Waits for the next message(s) from the hub app, prints them as <channel>
 # tags and exits, which wakes the session. Start it again after each wake.
+# This folder's hub.env (written by /bebop:setup), if there: HUB_HOME, HUB_URL, HUB_TOKEN_FILE.
+[[ -f ${0:A:h:h}/hub.env ]] && { set -a; source ${0:A:h:h}/hub.env; set +a }
 hub=${HUB_HOME:-${0:A:h:h:h:h}}
 export HUB_URL=${HUB_URL:-http://127.0.0.1:8787}
 export HUB_TOKEN_FILE=${HUB_TOKEN_FILE:-$hub/data/agent.token}
