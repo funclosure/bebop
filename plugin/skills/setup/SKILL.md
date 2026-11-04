@@ -118,7 +118,7 @@ Then walk them through it on the phone, and wait until they say it's done:
 
 1. Open `URL` in Safari (Chrome on Android). Tailscale must be on. Set the icon (step 6) before this: iOS keeps the Home Screen icon it saw when the app was added, until the app is removed and added again.
 2. Share → **Add to Home Screen**, and open the app from the Home Screen (iOS sends notifications only to Home Screen apps).
-3. Tap the name at the top for **Settings**. **Notifications** → Turn on. **Security** → Face ID lock → Turn on (this creates a passkey; after it, the app needs Face ID).
+3. Tap the gear (top right) for **Settings** (on a wide screen: Settings at the bottom of the sidebar). **Notifications** → Turn on. **Security** → Face ID lock → Turn on (this creates a passkey; after it, the app needs Face ID).
    If another Bebop hub already runs on this machine (same address, another port), its passkey and this one share a site. That's fine with this Bebop (each hub has its own passkey identity, named after the companion), but say so, and check afterwards that both hubs still unlock.
 
 ## 8. Make this folder the companion

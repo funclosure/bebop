@@ -1239,7 +1239,7 @@ function renderThreads() {
   const allUnread = state.generalUnread + state.threads.reduce((s, t) => s + t.unread, 0)
   const chip = (id, label, unread, extra = '') => h('button', { type: 'button', class: `chip${state.thread === id ? ' current' : ''}${extra}`, onclick: () => switchThread(id) }, label, unread ? h('span', { class: 'dot' }) : null)
   nav.append(chip(null, S.all, allUnread > 0 && state.thread !== null))
-  nav.append(h('button', { type: 'button', class: 'chip more', 'aria-haspopup': 'dialog', onclick: () => openTopicsSheet() }, S.topicsN(openTopics().length)))
+  // The full list is behind the name chip now (title-btn), so no Topics (N) chip here.
   const wanted = t => t.id === state.thread || (!isArchived(t) && (t.unread > 0 || t.lane === 'you'))
   const rank = t => t.id === state.thread ? 2 : t.unread > 0 ? 1 : 0
   for (const t of state.threads.filter(wanted).sort((a, b) => rank(b) - rank(a) || b.updated - a.updated))
@@ -1313,7 +1313,7 @@ function showSheet(view) {
   $('topics-list').scrollTop = 0
 }
 function openTopicsSheet(view = null) {
-  $('topics-title').textContent = S.projects
+  $('topics-title').textContent = S.topicsOf($('app').dataset.name, openTopics().length)
   $('topics-back').textContent = S.back(S.projects)
   showSheet(view)
   topicsSheet.show()
@@ -3643,7 +3643,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v101'
+const APP_VERSION = 'v102'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
@@ -3753,7 +3753,9 @@ async function openSettings() {
   await renderSettings()
   settingsSheet.show()
 }
-$('title-btn').onclick = openSettings
+// The phone's name chip opens every topic; the gear opens Settings (wide: the sidebar has both).
+$('title-btn').onclick = () => openTopicsSheet()
+$('settings-btn').onclick = openSettings
 $('side-settings').onclick = openSettings // wide windows: the title chip is the phone's, the agent has its own row there
 $('side-settings-label').textContent = S.settings
 
