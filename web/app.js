@@ -1046,8 +1046,9 @@ function sessionCard(x, go, column) {
 function topicItem(t, p, pick, column) {
   const cur = column && t.id === state.thread && !panes.open
   return h('div', { class: 'topic-row' },
-    h('button', { type: 'button', class: `home-topic${t.unread > 0 ? ' unread' : ''}${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => pick(t.id) }, topicDotEl(t),
-      h('span', { class: 'home-topic-main' }, h('span', { class: 'home-topic-title' }, shortTitle(t.title, p)), t.detail ? h('span', { class: 'home-topic-next' }, t.detail) : null)),
+    h('button', { type: 'button', class: `home-topic${t.unread > 0 ? ' unread' : ''}${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => pick(t.id) },
+      h('span', { class: 'home-topic-main' }, h('span', { class: 'home-topic-title' }, shortTitle(t.title, p)), t.detail ? h('span', { class: 'home-topic-next' }, t.detail) : null),
+      topicDotEl(t)), // at the end, in line with the session rows' dots
     topicHover(t))
 }
 // Always a way to talk to the session, topics or not. Each pick is a fresh conversation until
@@ -3661,7 +3662,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v104'
+const APP_VERSION = 'v105'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every

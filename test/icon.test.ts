@@ -164,4 +164,7 @@ test('projects without an icon show initials; only Bebop keeps the mark; session
   const card = app.slice(app.indexOf('function sessionCard('), app.indexOf('function topicItem('))
   expect(card).toContain("agentBadge(agent ?? '', 'lead')")
   expect(card).not.toContain('markEl(')
+  // Topic rows on a project's page: the state dot at the end, in line with the sessions'.
+  const item = app.slice(app.indexOf('function topicItem('), app.indexOf('// Always a way to talk'))
+  expect(item.indexOf('topicDotEl(t)')).toBeGreaterThan(item.indexOf('home-topic-main'))
 })
