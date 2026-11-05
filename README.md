@@ -2,6 +2,10 @@
 
 A phone-first client and message system for your own Claude Code session. You run the hub on the machine where the session lives; your phone talks to it as an installed web app over your Tailscale network; the session talks to it through a Claude Code channel. Nothing goes through a third-party chat service.
 
+https://github.com/user-attachments/assets/65f9b926-d7a1-4d01-bf08-fafe3c7a78bb
+
+<sub>Music: "Off to Osaka" by Kevin MacLeod (<a href="https://incompetech.com">incompetech.com</a>), licensed under <a href="https://creativecommons.org/licenses/by/4.0/">Creative Commons: By Attribution 4.0</a>.</sub>
+
 The idea: **one session is your chief of staff.** It's the one you talk to, from your phone or any browser. It keeps the context (memory, a journal, a task list), finds the right project session for each piece of work and hands it over, follows up, and proposes a new project when nothing fits. The other Claude Code sessions on the machine are its peers: it routes work to them, and you can look at their screens when you need to. Bebop is what makes that work: the app, the hub that carries the messages, and a template for the companion (`examples/companion/`).
 
 What you get, compared with talking to a session over a chat bot:
