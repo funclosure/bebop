@@ -34,6 +34,7 @@ https://github.com/user-attachments/assets/65f9b926-d7a1-4d01-bf08-fafe3c7a78bb
 You end up with the hub running as a background service, the phone app over Tailscale, and your companion started, with a persona it interviewed you for.
 
 **Later:** `/bebop:update` in the companion's folder updates Bebop and keeps everything that's yours ([Updating](examples/companion/README.md#updating)).
+
 **By hand:** [Requirements](#requirements), [Run it](#run-it), [Keep it running](#keep-it-running), [Expose it on your tailnet](#expose-it-on-your-tailnet), [Lock](#lock-passkeys), then [the companion](examples/companion/README.md).
 
 The idea: **one session is your chief of staff.** It's the one you talk to, from your phone or any browser. It keeps the context (memory, a journal, a task list), finds the right project session for each piece of work and hands it over, follows up, and proposes a new project when nothing fits. The other Claude Code sessions on the machine are its peers: it routes work to them, and you can look at their screens when you need to. Bebop is what makes that work: the app, the hub that carries the messages, and a template for the companion (`examples/companion/`).
