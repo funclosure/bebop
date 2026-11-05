@@ -856,7 +856,7 @@ body.col-dragging iframe { pointer-events: none; }
 @media (hover: hover) { .proj:hover { background: var(--surface); } .proj.current:hover { background: var(--surface-2); } .lane:hover { color: var(--text); } }
 .proj > .state-dot { width: 10px; height: 10px; }
 .proj-icon { flex: none; display: block; width: 32px; height: 32px; border-radius: 22.5%; object-fit: cover; }
-.proj-initial { display: grid; place-items: center; background: var(--surface-2); color: var(--muted); font-weight: 600; font-size: 14px; }
+.proj-initial { display: grid; place-items: center; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); color: var(--muted); font-weight: 600; font-size: 13px; letter-spacing: .02em; }
 .proj-slot { display: grid; place-items: center; }
 .proj-slot .state-dot { width: 10px; height: 10px; }
 .proj-slot svg { color: var(--muted); }
@@ -907,6 +907,16 @@ body.col-dragging iframe { pointer-events: none; }
 .sess { flex: none; display: flex; align-items: center; gap: 11px; background: var(--surface); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; box-shadow: var(--shadow); }
 .sess-row { width: 100%; border: 0; color: var(--text); text-align: left; font: inherit; }
 .sess-item .proj-icon { width: 30px; height: 30px; }
+/* A session's agent badge, on the icon's bottom-right corner, ringed in the row's background. */
+.badged { position: relative; flex: none; display: block; --ring: var(--bg); }
+.sess-item .badged { --ring: var(--surface); }
+.sess-item.current .badged, .topics-list .sess .badged { --ring: var(--surface-2); }
+@media (hover: hover) { .sess-row:hover .badged { --ring: var(--surface-2); } }
+.agent-badge { position: absolute; right: -4px; bottom: -4px; width: 15px; height: 15px; border-radius: 50%; display: grid; place-items: center;
+  box-shadow: 0 0 0 2px var(--ring); background: var(--surface-2); color: var(--muted); }
+.agent-badge svg { width: 11px; height: 11px; }
+.agent-badge.claude { background: #d97757; color: #fff; }
+.agent-badge.shell { background: #3a3a38; color: #f6f5f2; }
 .sess-row.current { background: var(--surface-2); box-shadow: none; }
 @media (hover: hover) { .sess-row:hover { background: var(--surface-2); } }
 .topics-list .sess { background: var(--surface-2); box-shadow: none; }

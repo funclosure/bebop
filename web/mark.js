@@ -124,3 +124,10 @@ export function markSvg(p, kind = 'icon') {
 
 /** A data: URL of the mark for a name, for an <img>. */
 export const markDataUrl = (name, seed = 0, kind = 'icon') => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(markSvg(markParams(name, seed), kind))
+
+/** A name's initials, for a project without an icon: the first letters of its first two words
+ *  ("Paper Boat" → PB, "night-owl" → NO, "LampPost" → LP); one word, one letter. */
+export function initials(name) {
+  const words = String(name ?? '').normalize('NFC').replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').split(/[\s_.-]+/u).filter(Boolean)
+  return words.slice(0, 2).map(w => [...w][0].toUpperCase()).join('') || '?'
+}

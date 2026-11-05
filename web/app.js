@@ -6,7 +6,7 @@ import { S } from './strings.js'
 import { parseAnsi, layoutScreen, spanCss, fleetCounts, findLinks, projectThread, newProjectThread, projectOfThread, validPeer, addressed, unaddressed } from './term.js'
 import { parseDialog, keysFor, cardable } from './dialog.js'
 import { postLimiter } from './limits.js'
-import { markDataUrl, markParams, ORIGINAL_SEED } from './mark.js'
+import { markDataUrl, markParams, ORIGINAL_SEED, initials } from './mark.js'
 
 const $ = id => document.getElementById(id)
 const h = (tag, attrs = {}, ...kids) => {
@@ -914,8 +914,10 @@ const needsTopics = () => openTopics().filter(t => topicDot(t) === 'red').sort(b
 const needsCount = () => needsTopics().length + blockedSessions().length
 
 function projectIcon(p, cls = 'proj-icon') {
-  // A project without an icon of its own gets the mark made from its name (web/mark.js).
-  const fallback = () => h('img', { class: `${cls} proj-made`, src: markDataUrl(p.name ?? '?'), alt: '' })
+  // A project without an icon of its own shows its initials. Only Bebop keeps the mark.
+  const fallback = () => String(p.name ?? '').toLowerCase() === 'bebop'
+    ? h('img', { class: `${cls} proj-made`, src: markDataUrl('Bebop'), alt: '' })
+    : h('span', { class: `${cls} proj-initial`, 'aria-hidden': 'true' }, initials(p.name))
   const img = p.icon ? h('img', { class: cls, src: p.icon, alt: '', loading: 'lazy' }) : null
   if (img) img.onerror = () => img.replaceWith(fallback())
   const el = img ?? fallback()
@@ -973,6 +975,18 @@ const AGENT_MARKS = {} // e.g. { codex: '<svg…>' }
 // On a terminal, the >_ slot closes it: the same frame with an × for the prompt.
 const ICON_TERMINAL_CLOSE = '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m9.5 9.5 5 5m0-5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>'
 const agentMark = agent => agent === 'shell' ? ICON_TERMINAL : AGENT_MARKS[agent] ?? ICON_AGENT
+// A session's icon: its project's, with the agent's badge on the bottom-right corner (like a
+// contact photo with the Messages badge). The ring takes the row's background (--ring).
+// One per agent: add pi, codex… here.
+const AGENT_BADGES = {
+  claude: { cls: 'claude', svg: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.6v10.8M2.6 8h10.8M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>' },
+  shell: { cls: 'shell', svg: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 5.5 2.5 2.5-2.5 2.5M8.5 11h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' },
+}
+const agentBadge = agent => {
+  const b = AGENT_BADGES[agent] ?? { cls: 'other', svg: ICON_AGENT }
+  return h('span', { class: `agent-badge ${b.cls}`, title: agent === 'shell' ? S.terminal : agent, html: b.svg })
+}
+const sessionIcon = p => h('span', { class: 'badged' }, projectIcon(paneIcon(p)), p.agent ? agentBadge(p.agent) : null)
 const markEl = (agent, cls = 'agent-mark') => h('span', { class: cls, title: agent === 'shell' ? S.terminal : agent, html: agentMark(agent) })
 function sessionsRow() {
   const cur = state.home?.kind === 'sessions', n = panes.list.filter(p => p.status === 'working').length
@@ -984,7 +998,7 @@ const byPaneDot = (a, b) => DOT_RANK[stateClass(a.status)] - DOT_RANK[stateClass
 function sessionItem(p) {
   const cur = panes.open && panes.id === p.id
   return h('button', { type: 'button', class: `sess sess-row sess-item${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => selectSession(p.id) },
-    projectIcon(paneIcon(p)),
+    sessionIcon(p),
     h('div', { class: 'sess-main' }, h('div', {}, p.title), h('small', {}, [p.project, S.paneStatus(p.status)].filter(Boolean).join(' · '))),
     dotEl(stateClass(p.status), p.status))
 }
@@ -2209,7 +2223,7 @@ const paneIcon = p => {
   return { name: S.projectName(p.project ?? p.agent ?? '?'), icon: key === selfName() ? 'icons/icon-192.png' : state.peers.find(x => projectKey(x.project) === key)?.icon ?? state.projectIcons[key] ?? null }
 }
 const paneRow = (p, onclick, current = false) => h('li', {}, h('button', { type: 'button', class: `peer pane-row ${p.status}${current ? ' current' : ''}`, 'aria-current': current ? 'true' : null, onclick },
-  projectIcon(paneIcon(p)),
+  sessionIcon(p),
   h('span', { class: 'peer-main' },
     h('span', { class: 'peer-name' }, p.title, h('span', { class: 'peer-state' }, S.paneStatus(p.status))),
     h('span', { class: 'peer-meta pane-meta' }, markEl(p.agent), [p.project, p.agent === 'shell' ? S.terminal.toLowerCase() : p.agent].filter(Boolean).join(' · '))),
@@ -3643,7 +3657,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v102'
+const APP_VERSION = 'v103'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
