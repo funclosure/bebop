@@ -224,6 +224,23 @@ export const S = {
   secSecurity: 'Security',
   secNotifications: 'Notifications',
   secAbout: 'About',
+  secCompanion: 'Companion',
+  engine: 'Runs on',
+  folder: 'Folder',
+  runningSince: 'Running since',
+  sinceLine: ts => { const d = new Date(ts), m = Math.round((Date.now() - ts) / 60000); return `${d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · ${m < 60 ? `${Math.max(m, 0)} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`}` },
+  notReported: 'Not reported yet',
+  notReportedHint: name => `${name} reports this when its session starts.`,
+  companionFile: { 'SOUL.md': 'Who it is', 'USER.md': 'What it knows about you', 'MEMORY.md': 'What it remembers' },
+  noCompanionFiles: 'No SOUL.md, USER.md or MEMORY.md in its folder',
+  companionHow: name => `To change ${name}, ask in chat (for example "update your SOUL to…"), or edit these files in its folder.`,
+  bebop: 'Bebop',
+  bebopLine: (b) => b.state === 'available' ? `Update available: ${b.behind} new ${b.behind === 1 ? 'commit' : 'commits'}${b.ahead ? `, ${b.ahead} of your own kept` : ''}`
+    : b.state === 'current' ? (b.ahead ? `Up to date, with ${b.ahead} ${b.ahead === 1 ? 'commit' : 'commits'} of your own` : 'Up to date')
+    : b.reason === 'no_remote' ? 'Can\'t check for updates: the checkout has no remote'
+    : b.reason === 'not_git' ? 'Can\'t check for updates: not a git checkout' : 'Couldn\'t check for updates just now',
+  restartHub: 'The hub runs older code than its checkout: restart it',
+  updateHow: name => `To update, run /bebop:update in ${name}'s session, or ask ${name} to. It asks before each step and keeps everything that's yours.`,
   secAppearance: 'Appearance',
   appIcon: 'Icon',
   change: 'Change',

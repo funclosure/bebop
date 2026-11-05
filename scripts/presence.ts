@@ -13,6 +13,7 @@
  *   PreToolUse       → working, with a short label for tool_name
  *   Stop             → idle
  * The hub's own tools (mcp__hub__*) leave the state alone.
+ *   SessionStart     → the session's model, for Settings → Companion (no state change)
  *
  * Env: HUB_URL (default http://127.0.0.1:8787), HUB_TOKEN_FILE (default
  * ../data/agent.token next to this script).
@@ -50,14 +51,16 @@ export function fromHookEvent(ev: any): { state: string; detail?: string } | nul
 
 async function main() {
   const args = process.argv.slice(2)
-  let body: { state: string; detail?: string } | null
+  let body: { state: string; detail?: string } | null, path = '/agent/presence', extra: any = null
   if (args[0] === '--hook') {
     let ev: any = null
     try { ev = JSON.parse(await Bun.stdin.text()) } catch {}
     body = fromHookEvent(ev)
+    if (ev?.hook_event_name === 'SessionStart' && ev.model) { path = '/agent/companion'; extra = { model: ev.model } }
   } else {
     body = args[0] ? { state: args[0], ...(args[1] ? { detail: args.slice(1).join(' ') } : {}) } : null
   }
+  if (extra) body = extra
   if (!body) return
   // With a hub.env (bin/hub-env.zsh sets HUB_ENV_FILE) the settings come from it, never a default.
   if (process.env.HUB_ENV_FILE && (!process.env.HUB_URL || !process.env.HUB_TOKEN_FILE))
@@ -68,7 +71,7 @@ async function main() {
   try { token = readFileSync(tokenFile, 'utf8').trim() } catch (e: any) { throw new Error(`can't read the token file ${tokenFile} (${e?.code ?? e})`) }
   let res: Response
   try {
-    res = await fetch(`${url}/agent/presence`, {
+    res = await fetch(`${url}${path}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),

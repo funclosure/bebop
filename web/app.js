@@ -157,11 +157,11 @@ const isText = f => isMarkdown(f) || f.mime.startsWith('text/') || /json|yaml|to
   /\.(txt|log|csv|json|ya?ml|toml|swift|ts|js|py|sh)$/i.test(f.name)
 let docToken = 0, docFile = null
 async function openDoc(f) {
-  const body = $('doc-body'), token = ++docToken
+  const body = $('doc-body'), token = ++docToken, src = f.url ?? fileUrl(f.id)
   docFile = null
   $('doc-title').textContent = f.name
-  $('doc-sub').textContent = fmtSize(f.size)
-  $('doc-download').href = `${fileUrl(f.id)}?download`
+  $('doc-sub').textContent = f.sub ?? fmtSize(f.size)
+  $('doc-download').href = f.url ? f.url : `${fileUrl(f.id)}?download`
   $('doc-download').download = f.name
   $('doc-download').onclick = e => shareInstead(e, f, docFile)
   body.className = 'sheet-body doc-body'
@@ -169,7 +169,7 @@ async function openDoc(f) {
   body.scrollTop = 0
   docSheet.show()
   try {
-    const res = await fetch(fileUrl(f.id))
+    const res = await fetch(src)
     if (!res.ok) throw new Error(res.status)
     const text = await res.text()
     if (token !== docToken) return
@@ -3662,7 +3662,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v105'
+const APP_VERSION = 'v106'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
@@ -3731,6 +3731,37 @@ const setRow = (label, value, sub) => h('div', { class: 'set-row' },
   h('span', { class: 'set-label' }, label, sub ? h('span', { class: 'set-sub' }, sub) : null),
   value == null ? null : typeof value === 'string' ? h('span', { class: 'set-value' }, value) : value)
 const section = (title, rows, note) => h('section', { class: 'set-section' }, h('h3', {}, title), h('div', { class: 'set-group' }, rows), note ? h('p', { class: 'set-note' }, note) : null)
+// Settings → Companion: who it is (from its folder), what runs it, its files, Bebop's version.
+let companionInfo = null
+async function loadCompanion() { try { companionInfo = await api('api/companion') } catch { companionInfo = null } }
+function companionRows() {
+  const c = companionInfo
+  if (!c) return []
+  const name = c.name
+  const card = h('div', { class: 'set-row comp-card' },
+    h('img', { class: 'comp-icon', src: 'icons/icon-192.png', alt: '' }),
+    h('span', { class: 'set-label' }, h('span', { class: 'comp-name' }, name), c.role ? h('span', { class: 'set-sub comp-role' }, c.role) : null))
+  const rows = [card,
+    setRow(S.engine, [c.engine, c.model].filter(Boolean).join(' · ') || S.notReported, c.engine ? null : S.notReportedHint(name)),
+    h('div', { class: 'set-row' }, h('span', { class: 'set-label' }, S.folder, h('span', { class: `set-sub${c.folder ? ' comp-path' : ''}` }, c.folder ?? S.notReported))),
+  ]
+  if (c.since) rows.push(setRow(S.runningSince, S.sinceLine(c.since)))
+  for (const f of c.files ?? []) {
+    rows.push(h('button', { type: 'button', class: 'set-row set-row-btn comp-file', onclick: () => openDoc({ name: f.name, url: `api/companion/file?name=${encodeURIComponent(f.name)}`, sub: S.companionFile[f.name] ?? '', mime: 'text/markdown' }) },
+      h('span', { class: 'set-label' }, f.name, h('span', { class: 'set-sub' }, S.companionFile[f.name] ?? '')),
+      h('span', { class: 'comp-chev', 'aria-hidden': 'true' }, '›')))
+  }
+  if (c.folder && !(c.files ?? []).length) rows.push(setRow(S.noCompanionFiles, null))
+  return rows
+}
+function bebopRows() {
+  const b = companionInfo?.bebop
+  if (!b) return []
+  const stale = b.running && b.commit && b.running !== b.commit
+  const day = b.date ? shortDate(Date.parse(b.date + 'T12:00:00')) : null
+  return [setRow(S.version, b.commit ?? '–', [day, S.bebopLine(b)].filter(Boolean).join(' · ')),
+    ...(stale ? [setRow(S.restartHub, b.running)] : [])]
+}
 async function renderSettings() {
   const [ns, version] = await Promise.all([
     notifyStatus(),
@@ -3752,7 +3783,10 @@ async function renderSettings() {
   }
   const notifyRows = [setRow(S.notifications,
     ns === 'off' ? h('button', { type: 'button', class: 'set-btn', onclick: async () => { await turnOnNotifications(); renderSettings() } }, S.turnOn) : S.notifyStatus(ns))]
+  const comp = companionRows(), name = companionInfo?.name ?? ''
   $('settings-body').replaceChildren(
+    comp.length ? section(S.secCompanion, comp, S.companionHow(name)) : '',
+    companionInfo?.bebop ? section(S.bebop, bebopRows(), S.updateHow(name)) : '',
     section(S.secSecurity, lockRows, lockState.enabled ? S.lockOffHint : S.lockHint),
     section(S.secNotifications, notifyRows, ns === 'install' ? S.installHint : null),
     section(S.secAppearance, appearanceRows(), S.iconHint),
@@ -3768,7 +3802,7 @@ async function renderSettings() {
 async function openSettings() {
   keyEdit.id = null; keyEdit.confirm = false
   iconPick.open = false
-  await Promise.all([loadLock(), loadIcon()])
+  await Promise.all([loadLock(), loadIcon(), loadCompanion()])
   await renderSettings()
   settingsSheet.show()
 }

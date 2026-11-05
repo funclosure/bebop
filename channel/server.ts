@@ -25,6 +25,12 @@ const log = (m: string) => process.stderr.write(`hub channel: ${m}\n`)
 process.on('unhandledRejection', e => log(`unhandled rejection: ${e}`))
 process.on('uncaughtException', e => log(`uncaught exception: ${e}`))
 
+/** "claude-code", "2.1.3" → "Claude Code 2.1.3". */
+export function engineName(name?: string, version?: string): string {
+  const n = !name ? 'Claude Code' : name === 'claude-code' ? 'Claude Code' : name
+  return version ? `${n} ${version}` : n
+}
+
 function token(): string {
   return readFileSync(TOKEN_FILE, 'utf8').trim()
 }
@@ -555,6 +561,10 @@ if (import.meta.main) {
     started = true
     // HUB_INBOUND=off: tools only; watch.ts delivers user messages instead.
     if (process.env.HUB_INBOUND !== 'off') void inboundLoop()
+    // Tell the hub who runs the companion and where it lives (Settings → Companion).
+    const c = mcp.getClientVersion()
+    void hub('/agent/companion', { folder: process.env.CLAUDE_PROJECT_DIR || process.cwd(), engine: engineName(c?.name, c?.version) })
+      .catch(e => log(`couldn't report the companion: ${e}`))
   }
   await mcp.connect(new StdioServerTransport())
 

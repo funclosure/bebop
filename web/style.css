@@ -825,6 +825,13 @@ details.ph-tools[open] > summary { margin-bottom: 3px; }
 .set-btn.danger { background: var(--alert); color: #fff; }
 .set-btn.plain.danger { background: none; color: var(--alert); }
 .set-note { margin: 6px 6px 0; font-size: 13px; color: var(--faint); }
+/* Settings → Companion */
+.comp-card { justify-content: flex-start; gap: 12px; padding-top: 12px; padding-bottom: 12px; }
+.comp-icon { flex: none; width: 48px; height: 48px; border-radius: 22.5%; }
+.comp-name { font-size: 17px; font-weight: 600; }
+.comp-role { color: var(--muted); font-size: 14px; line-height: 1.35; }
+.comp-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.comp-chev { flex: none; color: var(--faint); font-size: 22px; line-height: 1; }
 
 /* A topic's tool (Board, say): a full-screen sheet on the phone, a column on the right on wide windows. */
 .context-btn.tool-btn { display: inline-flex; align-items: center; gap: 5px; }

@@ -18,6 +18,7 @@ import { createShells, loadShellsConfig, riskOf, ShellError, type Shells, type S
 import { herdrProvider, rexProvider, rexShellBackend, herdrShellBackend, combinedProvider, createPaneWatcher, PaneError, stripAnsi, PANE_KEYS, PANE_MAX_KEYS, PANE_PROMPT_MAX, PANE_TEXT_BAD, type PaneProvider, type Pane } from './panes'
 import { runTranscriber } from './transcribe'
 import { createLock, type LockOptions } from './lock'
+import { updateChecker, roleFromSoul, modelLabel, tilde, companionFiles, readCompanionFile, validFolder, type CompanionInfo } from './companion'
 import { loadTools, boardShim, instanceIdFor, toolUrls, OVERVIEW_PAGE, DESK, toolInstructions, superviseTools, type Tool, type SuperviseOptions } from './tools'
 
 /** A peer's name: letters and digits in any script, _ . and -; as web/term.js validPeer. */
@@ -60,6 +61,8 @@ export type HubOptions = {
   agentId?: string
   /** The user's name, for places that show it to others (a tool's posts, a board's comments). */
   userName?: string
+  /** Tests: the Bebop checkout Settings checks for updates (default the hub's own) and how often. */
+  checkout?: { dir?: string; everyMs?: number }
   /** Folders a peer's `path` may be inside for its icon to be read (default the home folder; HUB_ICON_ROOTS). Terminals open only inside them too. */
   iconRoots?: string[]
   /** Tests: replaces the default icon sources. */
@@ -1545,6 +1548,38 @@ export function createHub(opts: HubOptions) {
     }
     return new Response(Bun.file(file), { headers: { ...headers, 'content-type': 'image/png' } })
   }
+  // ---------- the companion (Settings → Companion; hub/companion.ts) ----------
+  const updates = updateChecker(opts.checkout?.dir ?? join(import.meta.dir, '..'), { everyMs: opts.checkout?.everyMs })
+  const companion = (): CompanionInfo => { try { return JSON.parse((db.query("SELECT value FROM settings WHERE key = 'companion'").get() as { value: string } | null)?.value ?? '{}') } catch { return {} } }
+  async function agentCompanion(req: Request): Promise<Response> {
+    if (req.method === 'GET') return json(companion())
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    const cur = companion(), next: CompanionInfo = { ...cur }
+    if (b?.folder !== undefined) {
+      if (!validFolder(b.folder)) return err(400, 'folder: an absolute path to a folder')
+      next.folder = b.folder
+    }
+    // The engine reports when its session starts: that's "running since".
+    if (typeof b?.engine === 'string' && b.engine.trim()) { next.engine = b.engine.trim().slice(0, 60); next.since = Date.now() }
+    const model = modelLabel(b?.model)
+    if (model) next.model = model
+    db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('companion', ?)").run(JSON.stringify(next))
+    return json({ ok: true, ...next })
+  }
+  async function companionApi(): Promise<Response> {
+    const c = companion(), soul = readCompanionFile(c.folder, 'SOUL.md')
+    return json({
+      name: agentName, role: soul ? roleFromSoul(soul) : null,
+      engine: c.engine ?? null, model: c.model ?? null, since: c.since ?? null,
+      folder: c.folder ? tilde(c.folder) : null, files: companionFiles(c.folder),
+      bebop: { running: codeVersion, ...(await updates.status()) },
+    })
+  }
+  function companionFile(name: string): Response {
+    const text = readCompanionFile(companion().folder, name)
+    return text == null ? err(404, 'no such file') : new Response(text, { headers: { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'no-store' } })
+  }
   function setIconSeed(seed: number) {
     db.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('icon_seed', ?)").run(String(seed))
     broadcastUser('icon', { seed })
@@ -1611,6 +1646,7 @@ export function createHub(opts: HubOptions) {
         }
         if (path === '/agent/icon' && (method === 'GET' || method === 'POST')) return iconApi(req)
         if (method === 'GET' && path === '/agent/version') return json({ commit: codeVersion, started: hubStarted })
+        if (path === '/agent/companion' && (method === 'GET' || method === 'POST')) return agentCompanion(req)
         // A health check (channel/check.ts): a probe goes to every open agent stream and is
         // neither stored nor shown in the app. The watcher ignores it (it isn't a message).
         if (method === 'POST' && path === '/agent/probe') {
@@ -1713,6 +1749,8 @@ export function createHub(opts: HubOptions) {
           if (method === 'POST' && req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header required')
           if (method === 'GET' || method === 'POST') return iconApi(req)
         }
+        if (method === 'GET' && path === '/api/companion') return companionApi()
+        if (method === 'GET' && path === '/api/companion/file') return companionFile(url.searchParams.get('name') ?? '')
         if (method === 'GET' && path === '/api/tasks') return json(tasks())
         if (method === 'POST' && path === '/api/read') {
           const b = await req.json().catch(() => null) as { thread?: string | null; last_id?: number } | null
