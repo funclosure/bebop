@@ -3,7 +3,7 @@
 # usage: refine.sh <transcript-in> <prompt-out>
 # Called by the hub as HUB_REFINE_CMD="…/examples/refine.sh {in} {out}".
 # Optional settings in data/refine.env (sourced if present):
-#   REFINE_SPEAKER="Sam, a developer"     who is talking (default: the user)
+#   REFINE_SPEAKER="Bob, a developer"     who is talking (default: the user)
 #   REFINE_STYLE="Chinese is …"           extra language or wording rules, one line
 #   REFINE_TERM_DIRS=(~/code ~/tools)     folder names there count as names to get right
 #   REFINE_MODEL=claude-haiku-5-5

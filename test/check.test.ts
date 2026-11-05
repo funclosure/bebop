@@ -18,13 +18,13 @@ const check = (args: string[], env: Record<string, string | undefined>) => run('
 const dead = 'http://127.0.0.1:9' // nothing listens there
 
 test('check: all good is three ok lines; --hello sends a real message', async () => {
-  const r = await check(['--strict', '--hello', 'Sam is connected'], { HUB_URL: hub.url, HUB_TOKEN_FILE: token })
+  const r = await check(['--strict', '--hello', 'Bob is connected'], { HUB_URL: hub.url, HUB_TOKEN_FILE: token })
   expect(r.code).toBe(0)
   expect(r.out).toContain('ok   settings')
   expect(r.out).toContain('ok   hub: answers and takes the token')
   expect(r.out).toContain('ok   stream: a probe went through the hub and came back')
   const msgs = await (await user('/api/messages')).json()
-  expect(JSON.stringify(msgs)).toContain('Sam is connected')
+  expect(JSON.stringify(msgs)).toContain('Bob is connected')
 })
 
 test('version: the hub says which commit it runs; check notes a hub that runs other code', async () => {
@@ -103,7 +103,7 @@ test('bin/companion: reads hub.env again before every start, checks the hub, and
   const other = startHub()
   try {
     const root = mkdtempSync(join(tmpdir(), 'companion-'))
-    const folder = join(root, 'sam'), bin = join(root, 'fakebin')
+    const folder = join(root, 'bob'), bin = join(root, 'fakebin')
     cpSync(join(import.meta.dir, '..', 'examples', 'companion'), folder, { recursive: true })
     const checkout = join(import.meta.dir, '..')
     const env = (url: string, tok: string) => writeFileSync(join(folder, 'hub.env'), `HUB_HOME="${checkout}"\nHUB_URL="${url}"\nHUB_TOKEN_FILE="${tok}"\n`)

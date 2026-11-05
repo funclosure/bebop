@@ -2,9 +2,39 @@
 
 A phone-first client and message system for your own Claude Code session. You run the hub on the machine where the session lives; your phone talks to it as an installed web app over your Tailscale network; the session talks to it through a Claude Code channel. Nothing goes through a third-party chat service.
 
+**New here?** → [Start here](#start-here)
+
 https://github.com/user-attachments/assets/65f9b926-d7a1-4d01-bf08-fafe3c7a78bb
 
 <sub>Music: "Off to Osaka" by Kevin MacLeod (<a href="https://incompetech.com">incompetech.com</a>), licensed under <a href="https://creativecommons.org/licenses/by/4.0/">Creative Commons: By Attribution 4.0</a>.</sub>
+
+## Start here
+
+1. Make a folder for your companion and open Claude Code there:
+
+   ```sh
+   mkdir -p ~/companions/bob && cd ~/companions/bob && claude
+   ```
+
+2. Install the plugin. When it asks for a scope, pick **local**:
+
+   ```
+   /plugin marketplace add funclosure/bebop
+   /plugin install bebop@bebop
+   ```
+
+   <sub>Local means this folder only. User scope would load the setup skill into every Claude Code session you start. A folder outside your code tree keeps the companion from picking up the `CLAUDE.md` files above it. For a local checkout, use its path instead of `funclosure/bebop`.</sub>
+
+3. Run setup. It asks before every step that touches your system:
+
+   ```
+   /bebop:setup
+   ```
+
+You end up with the hub running as a background service, the phone app over Tailscale, and your companion started, with a persona it interviewed you for.
+
+**Later:** `/bebop:update` in the companion's folder updates Bebop and keeps everything that's yours ([Updating](examples/companion/README.md#updating)).
+**By hand:** [Requirements](#requirements), [Run it](#run-it), [Keep it running](#keep-it-running), [Expose it on your tailnet](#expose-it-on-your-tailnet), [Lock](#lock-passkeys), then [the companion](examples/companion/README.md).
 
 The idea: **one session is your chief of staff.** It's the one you talk to, from your phone or any browser. It keeps the context (memory, a journal, a task list), finds the right project session for each piece of work and hands it over, follows up, and proposes a new project when nothing fits. The other Claude Code sessions on the machine are its peers: it routes work to them, and you can look at their screens when you need to. Bebop is what makes that work: the app, the hub that carries the messages, and a template for the companion (`examples/companion/`).
 
@@ -28,27 +58,6 @@ PWA (phone, browser) ──HTTPS via tailscale serve──▶ hub (Bun, SQLite) 
 - `examples/refine.sh`: a dictation refiner on `claude -p` (see Dictation). Optional.
 - `examples/companion/`: a durable, always-on companion built on the hub (identity in files, journal, task ledger, crash relaunch, idle restart). Optional.
 - `data/` (gitignored): `hub.sqlite`, `files/`, `vapid.json`, `agent.token`.
-
-## Start here
-
-**With the setup skill** (recommended). Make an empty folder for your companion, open Claude Code there, and run the skill. It asks before each step that touches the system:
-
-```sh
-mkdir ~/companions/sam && cd ~/companions/sam && claude
-```
-```
-/plugin marketplace add funclosure/bebop
-/plugin install bebop@bebop
-/bebop:setup
-```
-
-When `/plugin install` asks for a scope, pick **local** (this folder only). Don't pick user scope: the setup skill would then load into every Claude Code session you start. Use a folder outside your code tree if you don't want the companion to pick up the `CLAUDE.md` files above it.
-
-It checks the tools, runs the hub as a background service, sets up the phone app over Tailscale, interviews you for the companion's persona, turns the folder into the companion, and starts it. A path works instead of `funclosure/bebop` for a local checkout.
-
-**Later**: `/bebop:update` in the companion's folder updates Bebop, the hub and the companion's Bebop files, and keeps everything that's yours (see `examples/companion/README.md`, Updating).
-
-**By hand**: the sections below, in order: Requirements, Run it, Keep it running, Expose it on your tailnet, Lock, then `examples/companion/README.md` for the companion.
 
 ## Requirements
 
@@ -120,7 +129,7 @@ The app can also be locked with a passkey (Face ID, Touch ID or the platform's o
 - **Idle lock.** The app locks again after 5 minutes away (no requests and no open event stream). "Lock now" locks it at once.
 - **Approvals.** Answering an approval card asks for the passkey again (step-up), even while unlocked.
 - **The relying party** is the host the app is opened on (for example `<machine>.<tailnet>.ts.net`), so a passkey only works on that hostname. Opening the hub under another name means registering a new passkey there.
-- **Two hubs on one machine** (say `https://<machine>…/` and `https://<machine>…:8443`) share that relying party, because the port doesn't count. Each hub gives its passkeys its own user handle and puts its name in the passkey's display name ("you@example.com (Sam)"), so your password manager keeps one passkey per hub. Hubs from before 2026-11-05 used the login as the handle, so a passkey made on one replaced the other's on every device synced with it (iCloud Keychain, for one). If that happened to you, see "Locked out?" below.
+- **Two hubs on one machine** (say `https://<machine>…/` and `https://<machine>…:8443`) share that relying party, because the port doesn't count. Each hub gives its passkeys its own user handle and puts its name in the passkey's display name ("you@example.com (Bob)"), so your password manager keeps one passkey per hub. Hubs from before 2026-11-05 used the login as the handle, so a passkey made on one replaced the other's on every device synced with it (iCloud Keychain, for one). If that happened to you, see "Locked out?" below.
 
 **Locked out?** (a lost phone, a renamed machine). Recovery happens on the hub machine, against `data/hub.sqlite` (or `HUB_DATA_DIR`):
 

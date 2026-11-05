@@ -19,10 +19,10 @@ test('mark: stable per name and seed, Bebop is the original, NFC and case don\'t
   expect(markParams('Bebop', 2).gap).not.toBeNull()
   expect(hash('Rio')).not.toBe(hash('Faye'))
   // Similar short names don't collapse onto one look (FNV alone made two such names twins).
-  const looks = new Set(['Rio', 'Faye', 'Sam', 'Ada', 'Kai', 'Mika', 'Otto', 'Juno'].map(n => { const p = markParams(n); return `${p.accent.name}/${p.angle}` }))
+  const looks = new Set(['Rio', 'Faye', 'Tess', 'Ada', 'Kai', 'Mika', 'Otto', 'Juno'].map(n => { const p = markParams(n); return `${p.accent.name}/${p.angle}` }))
   expect(looks.size).toBeGreaterThanOrEqual(6) // 16 looks: colour follows the turn, so collisions happen (the grid is for that)
   // One angle sets it all: accent from the turn's place on the wheel, the gap where the accent tail points.
-  for (const n of ['Faye', 'Sam', 'Zoë']) for (let seed = 0; seed < 20; seed++) {
+  for (const n of ['Faye', 'Tess', 'Zoë']) for (let seed = 0; seed < 20; seed++) {
     const p = markParams(n, seed)
     expect(p.angle % 22.5).toBe(0)
     expect(p.accent).toBe(ACCENTS[Math.floor(p.angle / 45)])

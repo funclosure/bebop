@@ -28,7 +28,7 @@ The hub is the client and the message system; this folder is one way to build an
 1. Run the hub and open the app on your phone (see the main README).
 2. Copy this folder somewhere of its own and make it a git repo (the companion commits its memory and journal):
    ```sh
-   cp -R /path/to/bebop/examples/companion ~/companions/sam && cd ~/companions/sam && git init
+   cp -R /path/to/bebop/examples/companion ~/companions/bob && cd ~/companions/bob && git init
    ```
    Then write `hub.env` there, so the companion finds the checkout and its hub (`bin/companion` reads it):
    ```sh

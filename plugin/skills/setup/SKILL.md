@@ -24,7 +24,7 @@ Keep these values as you go; later steps use them: `CHECKOUT`, `NAME`, `SLUG`, `
 
 ## 1. This folder
 
-Run `pwd` and `ls -A`. This folder becomes the companion. It should be empty, or hold only `setup-notes.md` or `.claude/`. If it holds anything else, ask whether to go on here or stop so they can make a fresh folder (for example `mkdir ~/companions/sam && cd ~/companions/sam && claude`).
+Run `pwd` and `ls -A`. This folder becomes the companion. It should be empty, or hold only `setup-notes.md` or `.claude/`. If it holds anything else, ask whether to go on here or stop so they can make a fresh folder (for example `mkdir -p ~/companions/bob && cd ~/companions/bob && claude`).
 
 Also check the folders above it for a `CLAUDE.md` (and say whether `~/.claude/CLAUDE.md` exists). Claude Code loads those into every session started here, so the companion would follow them too, and they color this setup. That can be fine, but say so, and suggest a folder outside their code tree (like `~/companions/<name>`) if they'd rather it start clean.
 

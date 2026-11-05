@@ -10,7 +10,7 @@ const TEMPLATE = join(import.meta.dir, '..', 'examples', 'companion')
 /** A fake Bebop checkout (just the template) and a companion made from it, recorded like setup does. */
 function setup(o: { record?: boolean; git?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'bebop-update-'))
-  const checkout = join(root, 'bebop'), folder = join(root, 'sam')
+  const checkout = join(root, 'bebop'), folder = join(root, 'bob')
   cpSync(TEMPLATE, join(checkout, 'examples', 'companion'), { recursive: true })
   cpSync(TEMPLATE, folder, { recursive: true })
   writeFileSync(join(folder, 'hub.env'), `HUB_HOME="${checkout}"\nHUB_URL="http://127.0.0.1:8788"\n`)
