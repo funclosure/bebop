@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/65f9b926-d7a1-4d01-bf08-fafe3c7a78bb
 
 ## Start here
 
-1. Make a folder for your companion and open Claude Code there:
+1. Make a folder for your companion and open Claude Code there. Name it anything; `bob` is just an example. The folder name doesn't matter: setup asks what to call your companion.
 
    ```sh
    mkdir -p ~/companions/bob && cd ~/companions/bob && claude
