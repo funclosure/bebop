@@ -160,4 +160,8 @@ test('projects without an icon show initials; only Bebop keeps the mark; session
   expect(fn).not.toContain('markDataUrl(p.name')
   expect(app).toMatch(/AGENT_BADGES = \{\s*claude:/)
   expect(app.match(/sessionIcon\(p\),/g)?.length).toBe(2) // the sidebar's Sessions and the phone's list
+  // A project's page: the agent's badge is the session row's icon (the project is in the header).
+  const card = app.slice(app.indexOf('function sessionCard('), app.indexOf('function topicItem('))
+  expect(card).toContain("agentBadge(agent ?? '', 'lead')")
+  expect(card).not.toContain('markEl(')
 })

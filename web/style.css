@@ -917,6 +917,11 @@ body.col-dragging iframe { pointer-events: none; }
 .agent-badge svg { width: 11px; height: 11px; }
 .agent-badge.claude { background: #d97757; color: #fff; }
 .agent-badge.shell { background: #3a3a38; color: #f6f5f2; }
+/* On a project's page the badge is the session row's own icon. */
+.agent-badge.lead { position: static; flex: none; width: 28px; height: 28px; box-shadow: none; }
+.agent-badge.lead svg { width: 18px; height: 18px; }
+.agent-badge.lead.other { box-shadow: inset 0 0 0 1px var(--line); }
+.agent-badge.lead.offline { opacity: .45; }
 .sess-row.current { background: var(--surface-2); box-shadow: none; }
 @media (hover: hover) { .sess-row:hover { background: var(--surface-2); } }
 .topics-list .sess { background: var(--surface-2); box-shadow: none; }

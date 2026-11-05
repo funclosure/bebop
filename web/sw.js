@@ -1,6 +1,6 @@
 // Service worker: app shell (network-first, cache fallback) and push.
 // It never answers /api, /agent or /files, never touches SSE or Range requests.
-const CACHE = 'shell-v103'
+const CACHE = 'shell-v104'
 const SHELL = ['./', 'style.css', 'app.js', 'strings.js', 'term.js', 'dialog.js', 'limits.js', 'mark.js', 'vendor/marked.js', 'vendor/purify.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/mark.svg', 'icons/icon-192.png']
 const scope = new URL(self.registration.scope)
 const shellPaths = new Set(SHELL.map(p => new URL(p, scope).pathname))

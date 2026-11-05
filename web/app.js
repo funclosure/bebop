@@ -982,9 +982,9 @@ const AGENT_BADGES = {
   claude: { cls: 'claude', svg: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.6v10.8M2.6 8h10.8M4.2 4.2l7.6 7.6M11.8 4.2l-7.6 7.6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>' },
   shell: { cls: 'shell', svg: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 5.5 2.5 2.5-2.5 2.5M8.5 11h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>' },
 }
-const agentBadge = agent => {
+const agentBadge = (agent, size = '') => {
   const b = AGENT_BADGES[agent] ?? { cls: 'other', svg: ICON_AGENT }
-  return h('span', { class: `agent-badge ${b.cls}`, title: agent === 'shell' ? S.terminal : agent, html: b.svg })
+  return h('span', { class: `agent-badge ${b.cls} ${size}`.trim(), title: agent === 'shell' ? S.terminal : agent || null, html: b.svg })
 }
 const sessionIcon = p => h('span', { class: 'badged' }, projectIcon(paneIcon(p)), p.agent ? agentBadge(p.agent) : null)
 const markEl = (agent, cls = 'agent-mark') => h('span', { class: cls, title: agent === 'shell' ? S.terminal : agent, html: agentMark(agent) })
@@ -1031,13 +1031,17 @@ function shortTitle(title, p) {
 function sessionCard(x, go, column) {
   const dot = dotEl(stateClass(x.state)), can = x.pane != null && panes.on
   const agent = x.pane != null ? panes.list.find(p => p.id === x.pane)?.agent : null
-  const main = h('div', { class: `sess-main${isOffline(x.state) ? ' offline' : ''}` }, h('div', { class: 'sess-line' }, agent ? markEl(agent) : null, S.sessionLine(x.state)), x.detail ? h('small', {}, x.detail) : null)
+  // The project is in the page's header, so the agent's badge is the row's icon; the state dot
+  // sits at the end, as in the Sessions list.
+  const icon = agentBadge(agent ?? '', 'lead'), off = isOffline(x.state)
+  if (off) icon.classList.add('offline')
+  const main = h('div', { class: `sess-main${off ? ' offline' : ''}` }, h('div', {}, S.sessionLine(x.state)), x.detail ? h('small', {}, x.detail) : null)
   // Beside the conversation a session is selected like a topic; in the sheet it opens full screen.
   if (column && can) {
     const cur = panes.open && panes.id === x.pane
-    return h('button', { type: 'button', class: `sess sess-row${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => go(x.pane) }, dot, main)
+    return h('button', { type: 'button', class: `sess sess-row${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => go(x.pane) }, icon, main, dot)
   }
-  return h('div', { class: 'sess' }, dot, main, can && !column ? h('button', { type: 'button', class: 'sess-term', onclick: () => go(x.pane) }, S.openSession) : null)
+  return h('div', { class: 'sess' }, icon, main, dot, can && !column ? h('button', { type: 'button', class: 'sess-term', onclick: () => go(x.pane) }, S.openSession) : null)
 }
 function topicItem(t, p, pick, column) {
   const cur = column && t.id === state.thread && !panes.open
@@ -3657,7 +3661,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v103'
+const APP_VERSION = 'v104'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
