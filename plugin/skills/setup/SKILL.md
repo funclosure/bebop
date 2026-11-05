@@ -44,7 +44,7 @@ Stop if `bun`, `tailscale` or `git` is missing or Tailscale isn't logged in. Set
 
 ## 3. The Bebop checkout
 
-Ask where Bebop is checked out. If they don't have it, offer to clone it: `git clone https://github.com/funclosure/bebop ~/bebop`. Check that `CHECKOUT/hub/main.ts` and `CHECKOUT/examples/companion/` exist. Then run `bun install` in `CHECKOUT` (ask first).
+Ask where Bebop is checked out. If the plugin came from a folder (`/plugin marketplace add <path>`, as with a fork), that folder is the checkout: `jq -r '.bebop.source.path // empty' ~/.claude/plugins/known_marketplaces.json` prints it; suggest it. If they don't have one, offer to clone it: `git clone https://github.com/funclosure/bebop ~/bebop`. Check that `CHECKOUT/hub/main.ts` and `CHECKOUT/examples/companion/` exist. Then run `bun install` in `CHECKOUT` (ask first).
 
 ## 4. Who the companion is
 

@@ -48,7 +48,7 @@ Needs `zsh`, `jq`, `bun` and `python3`. Optional: `COMPANION_CHANNELS` to load o
 
 ## Updating
 
-`/bebop:update` (in Claude Code, in this folder) updates the Bebop checkout, restarts the hub and runs `bin/update`. The companion can run it on itself. By hand: `git pull` in the checkout, restart the hub, then `bin/update --dry` to see what would change and `bin/update` to do it.
+`/bebop:update` (in Claude Code, in this folder) updates the Bebop checkout, restarts the hub and runs `bin/update`. The companion can run it on itself. By hand: `git pull` in the checkout (in a fork: `git fetch upstream && git merge upstream/main`), restart the hub, then `bin/update --dry` to see what would change and `bin/update` to do it.
 
 - **Bebop's files** are replaced when you haven't changed them: `bin/*`, `BEBOP.md`, `.mcp.json`. If you have, yours stays and Bebop's new version lands next to it as `FILE.bebop-new`. Then `bin/update --take FILE` (Bebop's replaces yours), `--keep FILE` (yours stays), or merge by hand and `--accept FILE`; `FILE` can be `all`.
 - **Merged**: `.claude/settings.json` (Bebop's hooks, permissions and MCP approval are added; yours stay) and `.gitignore`.

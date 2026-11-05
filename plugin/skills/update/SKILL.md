@@ -25,7 +25,15 @@ If the folder has no `bin/update` yet (set up before it existed), that's fine: r
 
 ## 2. Update the checkout (ask first)
 
-`git -C CHECKOUT status --short` must be clean. Then `git -C CHECKOUT pull --ff-only`, and `bun install` in `CHECKOUT`. Say which commits came in (`git -C CHECKOUT log --oneline <old>..HEAD`), in a few plain lines. If the checkout isn't a git clone, or they don't want to pull, go on with it as it is.
+`git -C CHECKOUT status --short` must be clean; if it isn't, ask them to commit or stash first. Note `<old>` = `git -C CHECKOUT rev-parse --short HEAD`.
+
+Where updates come from: the `upstream` remote if there is one (a fork, see README "Make it yours"), else the branch's own remote. Fetch it (`git -C CHECKOUT fetch upstream`, or `git -C CHECKOUT fetch`) and let `NEW` = `upstream/main` (or `@{u}`). Then:
+
+- **Nothing new** (`git -C CHECKOUT merge-base --is-ancestor NEW HEAD`): go on.
+- **Only Bebop moved** (`git -C CHECKOUT merge-base --is-ancestor HEAD NEW`): `git -C CHECKOUT merge --ff-only NEW`.
+- **Both moved** (their own commits on top, and new Bebop commits): show both sides in a few plain lines (`git -C CHECKOUT log --oneline NEW..HEAD` is theirs, `HEAD..NEW` is Bebop's), and ask to merge: `git -C CHECKOUT merge --no-edit NEW`. On conflicts, show each one plainly and resolve it with them (keep their change unless they say otherwise), then commit the merge. If they'd rather not, `git -C CHECKOUT merge --abort` and go on with the checkout as it was.
+
+Then `bun install` in `CHECKOUT`. Say which commits came in (`git -C CHECKOUT log --oneline <old>..HEAD`), in a few plain lines. Never push, not even to their own fork; tell them they can push it when they like. If the checkout isn't a git clone, or they don't want to update it, go on with it as it is.
 
 ## 3. Restart the hub (always before the companion)
 
