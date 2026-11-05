@@ -63,7 +63,7 @@ What you get, compared with talking to a session over a chat bot:
 - **Durable delivery.** The hub keeps every message until the session has it. Anything sent while the session was down arrives when it comes back.
 - **History and threads**, searchable, with original-quality photos, videos and files.
 - **Cards instead of text menus**: questions with options, approvals, live progress, background tasks.
-- **Voice notes**, transcribed by your own command (e.g. whisper.cpp), and dictation that tidies a rambling monologue into a prompt before you send it.
+- **Voice notes**, transcribed on your machine with whisper.cpp (setup offers it) or a command of your own, and dictation that tidies a rambling monologue into a prompt before you send it.
 - **Peers and sessions**: relay to other Claude Code sessions on the machine (plain Claude Code messaging, nothing else to install), and, if they run in [herdr](https://herdr.dev) or [Rex](https://superlogical.com/rex), see their screens and answer their prompts from your phone.
 - **Engine-agnostic.** The hub knows nothing about any one agent; a thin adapter connects an engine. The first adapter is a Claude Code channel.
 
@@ -232,7 +232,7 @@ If your agent sessions run in [herdr](https://herdr.dev) or [Rex](https://superl
 
 ### Voice notes
 
-With the composer empty, the send button becomes a mic: tap to record, tap ↑ to send, ✕ to cancel. The note is uploaded as-is (AAC on iOS, Opus elsewhere) and sent as `kind: 'voice'`. If `HUB_TRANSCRIBE_CMD` is set, the hub runs it on each note (`{in}` = the audio file, `{out}` = where to write the transcript), holds the note back from the agent until the transcript exists or `HUB_TRANSCRIBE_TIMEOUT_S` passes, and then delivers it with the text. Lines like `[1:23] text` are kept as timed cues and anything before the first cue is dropped as a header. A plain-text output works too. Without a transcriber, notes are delivered at once with `voice_path` only. Example: `HUB_TRANSCRIBE_CMD="whisper-cli -m model.bin -f {in} -otxt -of {out}"`, or any script that writes text to `{out}`.
+With the composer empty, the send button becomes a mic: tap to record, tap ↑ to send, ✕ to cancel. The note is uploaded as-is (AAC on iOS, Opus elsewhere) and sent as `kind: 'voice'`. If `HUB_TRANSCRIBE_CMD` is set, the hub runs it on each note (`{in}` = the audio file, `{out}` = where to write the transcript), holds the note back from the agent until the transcript exists or `HUB_TRANSCRIBE_TIMEOUT_S` passes, and then delivers it with the text. Lines like `[1:23] text` are kept as timed cues and anything before the first cue is dropped as a header. A plain-text output works too. Without a transcriber, notes are delivered at once with `voice_path` only. **Turn on voice notes:** `/bebop:setup` offers it (step 5): it installs whisper.cpp and ffmpeg, downloads a multilingual model (about 550 MB) and sets the command. By hand: `brew install whisper-cpp ffmpeg` (Linux: ffmpeg from your package manager, whisper.cpp built from source), `examples/transcribe.sh --fetch` for the model, then `HUB_TRANSCRIBE_CMD="/path/to/bebop/examples/transcribe.sh {in} {out}"` and restart the hub. It runs offline, detects the language, and writes `[m:ss] text` cues; `BEBOP_WHISPER_MODEL`, `BEBOP_WHISPER_LANG` and `BEBOP_WHISPER_PROMPT` (a sentence in the style you write, e.g. Traditional Chinese) tune it. Any other command that writes text to `{out}` works too.
 
 **Dictation (✨).** While recording, ✨ stops and turns the note into a draft instead of sending it: the hub transcribes it (`POST /api/dictate`), then runs `HUB_REFINE_CMD` (`{in}` = the transcript, `{out}` = the prompt; timeout `HUB_REFINE_TIMEOUT_S`, default 90) to tidy a rambling monologue into a concise prompt. The draft lands in the composer with the audio attached; Refined/Raw switches between the two, and you edit before sending. The message goes out as text with `dictation: { file, refined }`, and the agent sees `dictated="refined"` plus `raw_transcript_path`. `examples/refine.sh` is a refiner on `claude -p` (Haiku 5.5; `REFINE_MODEL` overrides) that keeps the speaker's language and every constraint; it reads optional settings (speaker, language rules, folders whose names it should get right) from `data/refine.env`, and extra names from `data/glossary.txt`. Example: `HUB_REFINE_CMD="/path/to/bebop/examples/refine.sh {in} {out}"`. Without a refiner, ✨ gives the raw transcript to review.
 
@@ -278,7 +278,7 @@ The script reads `HUB_URL` and `HUB_TOKEN_FILE` (by default `data/agent.token` i
 | `HUB_MAX_UPLOAD_MB` | `2048` | per request |
 | `HUB_DATA_DIR` | `./data` | |
 | `HUB_VAPID_SUBJECT` | `mailto:bebop@example.com` | contact for push services; set your own |
-| `HUB_TRANSCRIBE_CMD` | (unset) | speech-to-text command template with `{in}` and `{out}` |
+| `HUB_TRANSCRIBE_CMD` | (unset) | speech-to-text command template with `{in}` and `{out}`; `examples/transcribe.sh` is one (whisper.cpp) |
 | `HUB_TRANSCRIBE_TIMEOUT_S` | `120` | deliver a voice note without text after this long |
 | `HUB_REFINE_CMD` | (unset) | dictation refiner with `{in}` and `{out}`; `examples/refine.sh` reads `data/refine.env` |
 | `HUB_REFINE_TIMEOUT_S` | `90` | |

@@ -62,6 +62,11 @@ Ask, in one or two AskUserQuestion rounds. Ask; don't fill in answers from what 
 - **PORT**: the first free port from 8787 up. A port is taken if `lsof -nP -iTCP:<port> -sTCP:LISTEN` prints anything. Another Bebop hub may already be on 8787; each hub needs its own port.
 - **DATA**: the hub's data folder, one per hub, outside any git repo: `~/.local/share/bebop/SLUG` (the same on a Mac and on Linux; a path without spaces is easier everywhere). Create it.
 - **LOGIN**: their Tailscale login, which may use the app: `tailscale status --json | jq -r '.User[(.Self.UserID|tostring)].LoginName'`. Confirm it with them. More logins can be added later, separated by commas.
+- **Voice notes.** Ask: "Turn on voice notes?" Explain: the app records voice notes either way, but without a transcriber the companion gets only the audio. This turns speech into text on this machine with whisper.cpp, offline, in any language; it needs whisper-cli and ffmpeg and a one-time download of about 550 MB. In the same question, offer ✨ dictation tidying too (a rambling note becomes a short prompt before sending; it runs `claude -p` with Haiku, so it uses their Claude account). On yes:
+  1. Install the tools (ask first): on a Mac `brew install whisper-cpp ffmpeg`; on Linux tell them to install ffmpeg from their package manager and build whisper.cpp (https://github.com/ggml-org/whisper.cpp), then set `WHISPER_CLI` to its `whisper-cli` if it isn't on `PATH`.
+  2. Fetch the model now, so the first note doesn't wait for it: `CHECKOUT/examples/transcribe.sh --fetch` (run it in the background and go on; check it finished before step 6's check). Then `CHECKOUT/examples/transcribe.sh --check` prints `ok: …`.
+  3. Test it on a short sample: on a Mac `say -o /tmp/bebop-hello.aiff "Hello NAME"` then `CHECKOUT/examples/transcribe.sh /tmp/bebop-hello.aiff /tmp/bebop-hello.txt && cat /tmp/bebop-hello.txt` prints `[0:00] Hello …`. Elsewhere, skip the sample; the first real note is the test.
+  4. Keep `TRANSCRIBE` = `CHECKOUT/examples/transcribe.sh {in} {out}` for step 6, and, if they want dictation tidying, `REFINE` = `CHECKOUT/examples/refine.sh {in} {out}`. If their notes are in Chinese and they write Traditional characters, also set `BEBOP_WHISPER_PROMPT` = `以下是繁體中文的句子，請檢查軟體的建置。` (a sentence in the style they write; whisper leans to Simplified otherwise, and English notes are unaffected).
 
 ## 6. Run the hub as a service
 
@@ -91,7 +96,7 @@ So it keeps running after this terminal closes and starts again after a reboot.
 </dict></plist>
 ```
 
-If `HERDR` is set, also add `HUB_HERDR_BIN` = `HERDR`, so the app's Sessions view shows herdr's panes. Leave out `HERDR_DIR` if there's no herdr. Check the file with `plutil -lint`. Then have them load it:
+If `HERDR` is set, also add `HUB_HERDR_BIN` = `HERDR`, so the app's Sessions view shows herdr's panes. With voice notes, add `HUB_TRANSCRIBE_CMD` = `TRANSCRIBE` (and `HUB_REFINE_CMD` = `REFINE`, `BEBOP_WHISPER_PROMPT` if set), and make sure `PATH` includes whisper-cli's and ffmpeg's folder (Homebrew's is already there). Leave out `HERDR_DIR` if there's no herdr. Check the file with `plutil -lint`. Then have them load it:
 
 ```
 ! launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.bebop.SLUG.plist
@@ -102,6 +107,8 @@ Later: restart with `launchctl kickstart -k gui/$(id -u)/dev.bebop.SLUG`, stop w
 **Linux**: write `~/.config/systemd/user/bebop-SLUG.service` with the same settings (`WorkingDirectory=CHECKOUT`, `ExecStart=BUN hub/main.ts`, one `Environment=` line each, `Restart=always`). Have them run `! systemctl --user enable --now bebop-SLUG`.
 
 Then set the icon they picked: `HUB_URL=http://127.0.0.1:PORT HUB_TOKEN_FILE=DATA/agent.token bun CHECKOUT/scripts/icon.ts set SEED` (skip it for seed 0).
+
+With voice notes turned on later, after the service is running: add the same keys to the plist (or the unit), then restart the hub (`launchctl kickstart -k …`, `systemctl --user restart …`).
 
 **Check:** within ten seconds, `DATA/agent.token` exists and `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat DATA/agent.token)" 'http://127.0.0.1:PORT/agent/history?limit=1'` prints `200`. If not, show the last lines of the log.
 
