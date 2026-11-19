@@ -99,11 +99,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .icon-btn.small { width: 30px; height: 30px; border-radius: 8px; font-size: 13px; }
 .icon-btn.active { color: var(--accent); }
 
-.threads {
-  position: relative; display: flex; gap: 6px; overflow-x: auto; padding: 6px 16px 10px;
-  scrollbar-width: none;
-}
-.threads::-webkit-scrollbar { display: none; }
 .chip {
   flex: none; position: relative;
   border: 1px solid var(--line); background: var(--surface);
@@ -111,8 +106,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   white-space: nowrap;
 }
 .chip.current { background: var(--text); color: var(--bg); border-color: var(--text); }
-.chip .dot { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); }
-.context { padding: 0 16px 8px; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Message list */
 .list {
@@ -135,8 +128,17 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .msg { display: flex; flex-direction: column; margin: 10px 0; max-width: 100%; }
 .msg.user { align-items: flex-end; }
 .msg.agent { align-items: flex-start; }
-.meta-line { font-size: 12px; color: var(--faint); margin: 0 6px 3px; display: flex; gap: 6px; align-items: center; }
+.meta-line { font-size: 12px; color: var(--faint); margin: 0 6px 3px; display: flex; gap: 6px; align-items: center; min-width: 0; max-width: calc(100% - 12px); }
+.meta-line > * { flex: none; white-space: nowrap; }
+/* The sender and the time stay whole; a long topic name gives way. */
+.meta-line > .thread-tag { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .thread-tag { border: 0; background: var(--surface-2); color: var(--muted); border-radius: 6px; padding: 0 6px; font-size: 11.5px; }
+/* The sender line: the sending project's icon and who it's from. */
+.sender { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--muted); font-weight: 600; }
+.sender-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sender-icon { flex: none; display: block; width: 16px; height: 16px; border-radius: 22.5%; object-fit: cover; }
+.sender-icon.proj-initial { font-size: 8px; letter-spacing: 0; }
+.sender-icon.self-mark { border-radius: 50%; }
 .bubble-wrap { position: relative; max-width: min(88%, 640px); touch-action: pan-y; transition: transform .15s; }
 .msg.wide .bubble-wrap { max-width: min(96%, 640px); width: 100%; }
 .bubble {
@@ -258,6 +260,15 @@ button.file-chip { width: 100%; border: 0; text-align: left; font: inherit; font
 .answers { margin: 0; padding: 0; list-style: none; font-size: 15px; }
 .answers li { padding: 2px 0; }
 .answers .k { color: var(--muted); }
+.card.closed { background: var(--bg); box-shadow: none; color: var(--muted); }
+.card.closed .q-prompt, .card.closed .detail, .card.closed .answers { opacity: .7; }
+.closed-note { font-size: 12.5px; color: var(--muted); margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.closed-note strong { font-weight: 600; }
+.closed-note .link-btn { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; }
+/* Swipe a card left to show Dismiss (iPhone); it sits just past the card's right edge until then. */
+.swipe-dismiss { position: absolute; top: 0; bottom: 0; right: -92px; width: 84px; border: 0; border-radius: var(--radius); background: var(--alert); color: #fff; font-size: 15px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.bubble-wrap.revealed .swipe-dismiss { opacity: 1; pointer-events: auto; }
+.bubble-wrap:has(> .swipe-dismiss) { touch-action: pan-y; }
 .answered-note { font-size: 12.5px; color: var(--ok); margin-top: 8px; }
 
 .approval .detail { margin: 6px 0 2px; font-size: 15px; }
@@ -292,6 +303,14 @@ button.file-chip { width: 100%; border: 0; text-align: left; font: inherit; font
 #new-pill { left: auto; right: 16px; transform: none; }
 
 /* Composer */
+.drop-zone {
+  position: absolute; inset: 8px; z-index: 40; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent); border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+}
+.drop-zone[hidden] { display: none; }
+.drop-zone span { font-size: 17px; font-weight: 600; color: var(--accent); background: var(--bg); padding: 8px 16px; border-radius: 999px; }
 .composer {
   background: var(--bg); border-top: 1px solid var(--line);
   padding: 8px 10px calc(8px + var(--safe-bottom));
@@ -371,6 +390,10 @@ html.kb { --safe-bottom: 0px; } /* composer, toast and sheets lose the home-indi
 .sheet-backdrop.open .sheet { transform: translateY(0); }
 /* Fills the gap under the sheet when it is pulled up past its resting place. */
 .sheet::after { content: ''; position: absolute; left: 0; right: 0; top: calc(100% - 1px); height: 60px; background: var(--surface); }
+/* A sheet that ends in its scrolling list: the list runs to the sheet's bottom edge and keeps the
+   home-indicator room inside it, so its last row scrolls fully into view, not under a blank band. */
+.sheet:has(> .sheet-body:last-child) { padding-bottom: 0; }
+.sheet > .sheet-body:last-child { padding-bottom: calc(14px + var(--safe-bottom)); }
 .sheet-backdrop.dragging::before, .sheet.dragging { transition: none; }
 .sheet-grabber { flex: none; height: 22px; display: grid; place-items: center; margin: 0 -14px; cursor: grab; touch-action: none; }
 .sheet-grabber::before { content: ''; width: 36px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--faint) 55%, transparent); }
@@ -579,17 +602,39 @@ a.pill-btn { color: var(--text); text-decoration: none; }
 .day-pick::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: auto; height: auto; opacity: 0; cursor: pointer; }
 
 /* Threads: archived */
-.chip.archived { border-style: dashed; }
-.chip.more { color: var(--faint); background: transparent; }
-.context { display: flex; align-items: center; gap: 10px; }
-.context-btn.back { font-weight: 500; }
-.context-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .context-btn { flex: none; border: 0; background: none; padding: 0 2px; font-size: 13px; color: var(--accent); }
-.context-btn.archive { display: inline-flex; align-items: center; gap: 5px; }
 .context-icon { display: grid; place-items: center; }
 .archived-row { display: flex; align-items: center; gap: 8px; }
 .archived-row .peer { flex: 1; min-width: 0; }
 .archived-row .peer-name { font-weight: 500; }
+
+/* The agent's timers (Scheduled): text, when, then Move and Cancel. */
+.timer-row { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--line); }
+.timer-row:last-child { border-bottom: 0; }
+.timer-row .peer-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.timer-row .peer-name { font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.timer-actions { display: flex; gap: 6px; flex: none; }
+.timer-actions .danger { color: var(--alert); border-color: var(--alert); }
+
+/* Notes to the agent that are neither the user's nor the agent's: a peer's note, a timer going off.
+   Quiet and full width, so they read as passing by, not as a turn in the conversation. */
+.msg.note { align-items: stretch; margin: 6px 0; }
+.note-card { border: 1px dashed var(--line); border-radius: 12px; padding: 7px 12px; color: var(--muted); font-size: 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+details.note-card > summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+details.note-card > summary::-webkit-details-marker { display: none; }
+details.note-card[open] > summary .note-first, details.note-card[open] > summary .note-more { display: none; }
+.note-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--faint); }
+.note-who { font-weight: 600; color: var(--muted); align-self: center; display: inline-flex; min-width: 0; }
+.note-time { margin-left: auto; }
+.note-first { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-more { font-size: 12.5px; color: var(--accent); }
+.note-body { color: var(--text); padding-top: 4px; overflow-wrap: anywhere; }
+.note-body .md > :first-child { margin-top: 0; }
+.note-line { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 13px; padding: 0 4px; min-width: 0; }
+.note-line .note-icon { display: inline-flex; flex: none; }
+.note-line .note-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.note-late { font-size: 11.5px; border: 1px solid var(--warn); color: var(--warn); border-radius: 999px; padding: 0 6px; }
+.note-head .thread-tag, .note-line .thread-tag { font-size: 12px; }
 .pill-btn.small { padding: 4px 12px; font-size: 13.5px; flex: none; }
 
 /* Search: a full view over the app */
@@ -904,6 +949,17 @@ body.col-dragging iframe { pointer-events: none; }
 /* A project's page */
 .home { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .home-head { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; min-width: 0; }
+.link-dialog { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); padding: 18px; width: min(440px, calc(100vw - 32px)); box-sizing: border-box; }
+.link-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+.link-dialog h3 { margin: 0 0 12px; font-size: 18px; }
+.link-input { width: 100%; box-sizing: border-box; font-size: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); }
+.link-note { margin: 8px 0 14px; font-size: 13px; color: var(--muted); }
+.link-note.error { color: var(--alert); }
+.link-actions .danger { color: var(--alert); }
+.link-actions { display: flex; gap: 8px; align-items: center; }
+.link-actions .grow { flex: 1; }
+.home-head .project-link { margin-left: auto; flex: none; text-decoration: none; white-space: nowrap; }
+.home-head .project-link + .home-tools { margin-left: 12px; }
 .home-tools { margin-left: auto; flex: none; display: flex; gap: 12px; }
 .home-tools .context-btn { font-size: 15px; min-height: 36px; }
 .home-head h2 { margin: 0; font-size: 23px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -975,11 +1031,11 @@ body.col-dragging iframe { pointer-events: none; }
   .home .home-topic { padding: 10px 12px 10px 8px; border-radius: 10px; }
   .home .topic-row { border-top: 0; }
   .home .home-topic.current { background: var(--surface-2); }
-  #app.blank .list, #app.blank .floating, #app.blank .composer, #app.blank .context { display: none; }
+  #app.blank .list, #app.blank .floating, #app.blank .composer { display: none; }
   /* A selected session: its terminal in the conversation's place, under the header. The session
      is chosen on the left, so the picker strip and Done are the phone's. */
   #app.pane-on { max-width: none; }
-  #app.pane-on .list, #app.pane-on .floating, #app.pane-on .composer, #app.pane-on .context { display: none; }
+  #app.pane-on .list, #app.pane-on .floating, #app.pane-on .composer { display: none; }
   #app.pane-on .panes-view { position: static; flex: 1; min-height: 0; padding-top: 0; }
   #panes-close, #pane-fleet { display: none; }
   #panes-btn.active { color: var(--accent); background: var(--accent-soft); }
@@ -1007,7 +1063,6 @@ body.col-dragging iframe { pointer-events: none; }
   .side-topics::-webkit-scrollbar-track, .home::-webkit-scrollbar-track { background: transparent; }
   .side-topics::-webkit-scrollbar-thumb, .home::-webkit-scrollbar-thumb { background: transparent; border-radius: 3px; }
   .side-topics:hover::-webkit-scrollbar-thumb, .home:hover::-webkit-scrollbar-thumb { background: var(--line); }
-  .threads { display: none; }
   .bar { padding-bottom: 8px; }
   /* Tasks live on the agent's row here. */
   #tasks-chip { display: none !important; }
@@ -1017,6 +1072,11 @@ body.col-dragging iframe { pointer-events: none; }
 .agent-off { margin: 0; padding: 8px 16px; background: color-mix(in srgb, var(--warn) 14%, var(--bg)); color: var(--text); font-size: 14px; line-height: 1.35; border-bottom: 1px solid var(--line); }
 .agent-off strong { font-weight: 600; }
 .agent-off[hidden] { display: none; }
+.hub-down { display: flex; align-items: center; gap: 12px; margin: 0; padding: 8px 12px 8px 16px; background: color-mix(in srgb, var(--warn) 18%, var(--bg)); color: var(--text); font-size: 14px; line-height: 1.35; border-bottom: 1px solid var(--line); }
+.hub-down-text { flex: 1; min-width: 0; }
+.hub-down strong { font-weight: 600; }
+.hub-down[hidden] { display: none; }
+.agent-ask { background: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
 
 /* Settings → Appearance: the icon and its variants. */
 .icon-pick-now { display: inline-flex; align-items: center; gap: 14px; }
@@ -1034,3 +1094,71 @@ body.col-dragging iframe { pointer-events: none; }
 .icon-original { display: flex; align-items: center; gap: 10px; justify-content: center; border-top: 1px solid var(--line); padding-top: 8px; }
 
 .title-more { flex: none; margin-left: -2px; opacity: .55; }
+#sheet-actions .danger { color: var(--alert); }
+
+/* The topic bar (renderTopicBar). On the phone: in a topic, one row under the top bar; in All the
+   same row floats over the top of the list (.topic-pin). There is no chip row or context line: the
+   name button opens the project list, with Needs you and All topics. Wide windows: below. */
+.topic-bar { position: relative; overflow: hidden; display: flex; align-items: center; gap: 2px; padding: 4px 6px 6px 2px; min-height: 54px; }
+/* The row itself (swapRow): another topic's row slides in by one edge as the old one leaves by the other. */
+.tb-row { flex: 1; min-width: 0; display: flex; align-items: center; gap: inherit; }
+.tb-row.leaving { pointer-events: none; }
+.topic-pin { position: absolute; top: 100%; left: 0; z-index: 1; right: 0; padding-left: 10px; background: var(--bg); border-bottom: 1px solid var(--line); box-shadow: 0 6px 12px -10px rgb(0 0 0 / .35); }
+.tb-back { flex: none; position: relative; display: inline-flex; align-items: center; gap: 5px; height: 44px; min-width: 40px; padding: 0 6px 0 10px; border: 0; background: none; color: var(--accent); border-radius: 12px; }
+.tb-chev { font-size: 32px; line-height: 1; font-weight: 300; margin-top: -4px; }
+.tb-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 4px 6px; border: 0; background: none; color: var(--text); text-align: left; border-radius: 12px; }
+.tb-main:active, .tb-back:active, .tb-session:active, .tb-menu:active { background: var(--surface-2); }
+.tb-icon { flex: none; display: block; width: 34px; height: 34px; border-radius: 22.5%; object-fit: cover; }
+.tb-icon.self-mark { border-radius: 50%; }
+.tb-icon.proj-initial { font-size: 13px; }
+.tb-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tb-title { font-size: 15px; font-weight: 600; line-height: 1.25; letter-spacing: -0.01em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.tb-sub { font-size: 12.5px; line-height: 1.3; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-more-chev { flex: none; display: grid; color: var(--faint); }
+.tb-session { flex: none; position: relative; display: inline-grid; place-items: center; width: 44px; height: 44px; border: 0; background: none; color: var(--muted); border-radius: 12px; }
+.tb-session .state-dot { position: absolute; bottom: 9px; right: 6px; width: 9px; height: 9px; box-shadow: 0 0 0 2px var(--bg); }
+.tb-session-n { position: absolute; top: 5px; right: 3px; min-width: 15px; padding: 0 3px; border-radius: 8px; background: var(--surface-2); font-size: 10.5px; font-weight: 700; line-height: 15px; color: var(--muted); }
+.tb-menu { flex: none; width: 40px; height: 44px; border: 0; background: none; color: var(--muted); font-size: 22px; line-height: 1; border-radius: 12px; }
+.sheet-actions .sheet-link { display: block; padding: 12px 6px; font-size: 16px; border-radius: 10px; color: var(--accent); text-decoration: none; }
+/* The topic list (the name button): Needs you and All topics above the projects. A topic's next step
+   is cut to two lines there (one in All topics), so a long one doesn't fill the screen. */
+#topics-list { overflow-x: hidden; }
+.sheet-chips { flex: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 6px 8px; }
+.sheet-chips .needs-chip { margin: 0; }
+.all-chip-icon { display: grid; }
+/* The same cut in a project's column on wide windows, where a long next step filled the column. */
+.topics-list .home-topic-title, .home .home-topic-title { overflow-wrap: anywhere; }
+.topics-list .home-topic-next, .home .home-topic-next { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.topics-list .home-topic-next.one-line { -webkit-line-clamp: 1; }
+.all-topic { align-items: flex-start; }
+.all-topic .all-icon { flex: none; width: 26px; height: 26px; margin-top: 1px; border-radius: 22.5%; object-fit: cover; }
+.all-topic .all-icon.proj-initial { font-size: 10px; }
+.all-topic.current { background: var(--surface-2); border-radius: 10px; }
+
+/* Wide windows: the topic row takes the top bar's empty left side, so the conversation has one
+   header row (the sidebar is the way back). Inside a topic it names the topic, with its session,
+   tools and Archive; in All it names the topic of the message at the top of the list, or the
+   agent when that message has none. The app's buttons stay on the right. */
+.tb-act { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px; border: 0; border-radius: 10px; background: none; color: var(--muted); font-size: 14px; white-space: nowrap; }
+.tb-act.on { color: var(--accent); }
+.tb-act-icon, .tb-act .context-icon { display: grid; place-items: center; }
+.tb-act img.context-icon { width: 17px; height: 17px; }
+.tb-main.static { cursor: default; }
+@media (min-width: 900px) {
+  .top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; container-type: inline-size; }
+  .top > .bar { display: contents; }
+  .title-row { display: none; }
+  .bar-actions { grid-column: 2; grid-row: 1; padding: 8px 16px 8px 4px; }
+  .topic-bar { grid-column: 1; grid-row: 1; gap: 4px; min-height: 58px; padding: 6px 0 6px 10px; }
+  /* A line between the topic's buttons and the app's. */
+  #topic-bar:not(.pinned)::after { content: ''; flex: none; margin-left: 4px; width: 1px; height: 22px; background: var(--line); }
+  #app.pane-on .topic-bar, #app.blank .topic-bar { display: none; }
+  .topic-bar .tb-main { min-height: 46px; padding: 4px 8px; }
+  .topic-bar .tb-icon { width: 32px; height: 32px; }
+  .topic-bar .tb-session { width: 40px; height: 40px; }
+  .topic-bar .tb-session .state-dot { bottom: 7px; right: 4px; }
+  .tb-main:not(.static):hover, .tb-session:hover, .tb-act:hover, .tb-menu:hover { background: var(--surface-2); }
+  .tb-main.static .tb-title { font-weight: 600; }
+}
+/* A narrow conversation (a project's column and a tool beside it): Archive is its icon. */
+@container (max-width: 620px) { .tb-act-label { display: none; } .tb-act { padding: 0 8px; } }

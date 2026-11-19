@@ -159,7 +159,8 @@ const B = 'block:01a1a609-0ce3-71e8-9e06-fc0f5a7ff296'
 function fakeRex(proc: any) {
   const calls: string[][] = []
   const run: Runner = async argv => {
-    const a = argv.slice(1)
+    if (argv[1] !== '--autostart=false') throw new Error('rex called without --autostart=false: a poll must never restart Rex')
+    const a = argv.slice(2)
     calls.push(a)
     const key = a.join(' ')
     if (a[0] === 'new') return { code: 0, stdout: JSON.stringify({ session_id: S, initial_windows: [{ block_ids: [B] }] }), stderr: '' }

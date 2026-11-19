@@ -11,7 +11,8 @@ const zsh = { foreground: { pid: 8, argv0: '-zsh', name: 'zsh', cwd: '/work' } }
 function fakeRex(over: Record<string, { code?: number; stdout: string; stderr?: string }> = {}) {
   const calls: string[][] = []
   const run: Runner = async argv => {
-    const a = argv.slice(1)
+    if (argv[1] !== '--autostart=false') throw new Error('rex called without --autostart=false: a poll must never restart Rex')
+    const a = argv.slice(2)
     calls.push(a)
     const key = a.join(' ')
     for (const [k, v] of Object.entries(over)) if (key.startsWith(k)) return { code: v.code ?? 0, stdout: v.stdout, stderr: v.stderr ?? '' }
@@ -47,6 +48,20 @@ test('rex: status comes from the foreground program; stale, unknown and error re
   expect(rexAgent(claude)).toBe('claude')
   expect(rexAgent(zsh)).toBeNull()
   expect(rexAgent({})).toBeNull()
+  // A launcher script (zsh running claude as its child): Claude Code's own report says so.
+  const cc = { records: [{ state: 'blocked', app: 'claude-code', effective_app: 'claude-code', owner: { pid: 8 } }] }
+  expect(rexAgent(zsh, cc)).toBe('claude')
+  expect(rexAgent(zsh, { records: [{ state: 'done', app: 'claude-code', owner: { pid: 99 } }] })).toBeNull() // an earlier claude, gone
+  expect(rexAgent(zsh, { records: [{ state: 'working', app: 'other', owner: { pid: 8 } }] })).toBeNull()
+})
+
+test('rex: a companion started by its launcher script is listed as a claude pane, its prompt as blocked', async () => {
+  const f = fakeRex({ [`block call -b ${B2} program_status`]: { stdout: JSON.stringify({ records: [{ state: 'blocked', app: 'claude-code', owner: { pid: 8 } }] }) } })
+  const list = await rexProvider({ bin: '/opt/rex', run: f.run }).list()
+  expect(list.map(p => [p.id, p.agent, p.status, p.project])).toEqual([
+    [rexPaneId(S, B1), 'claude', 'blocked', 'proj-r'],
+    [rexPaneId(S, B2), 'claude', 'blocked', 'work'],
+  ])
 })
 
 test('rex: cursor-right runs become spaces', () => {

@@ -2,17 +2,19 @@
 //   user side  (/, /api/*, /files/*)  authenticated by tailscale serve's login header
 //   agent side (/agent/*)             authenticated by a bearer token in data/agent.token
 import type { Server } from 'bun'
-import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, statSync, chmodSync, rmSync } from 'fs'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync, statSync, chmodSync, rmSync, realpathSync, renameSync } from 'fs'
 import { open } from 'fs/promises'
-import { join, extname, basename, normalize, isAbsolute } from 'path'
-import { randomBytes, timingSafeEqual } from 'crypto'
-import { openDb, type MessageRow, type FileRow } from './db'
+import { join, extname, basename, normalize, isAbsolute, relative, sep } from 'path'
+import { randomBytes, timingSafeEqual, createHash } from 'crypto'
+import { openDb, INBOUND, type MessageRow, type FileRow, type Sender } from './db'
+import { videoSize, type Size } from './media'
+import { parseAt, parseRepeat, nextDue, localIso, type TimerRow } from './clock'
 import { markParams, markShapes, markSvg, hash } from '../web/mark.js'
 import { rasterize, encodePng } from './raster'
 import { boundaryOf, streamMultipart } from './multipart'
 import { loadVapid, sendPushToAll, type PushPayload } from './push'
 import { iconResolver, type IconSource } from './icons'
-import { homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { findTranscript, readTranscript } from './transcript'
 import { createShells, loadShellsConfig, riskOf, ShellError, type Shells, type ShellBackend } from './shells'
 import { herdrProvider, rexProvider, rexShellBackend, herdrShellBackend, combinedProvider, createPaneWatcher, PaneError, stripAnsi, PANE_KEYS, PANE_MAX_KEYS, PANE_PROMPT_MAX, PANE_TEXT_BAD, type PaneProvider, type Pane } from './panes'
@@ -139,6 +141,9 @@ const newId = () => randomBytes(12).toString('base64url')
 
 const TOOL_REF_TEXT_MAX = 200
 
+// A note telling the agent the user moved or cancelled a timer: delivered, never shown in the app.
+const HIDDEN_TIMER_NOTE = `NOT (kind = 'timer' AND json_extract(body_json, '$.change') IS NOT NULL)`
+
 const snippet = (s: unknown, n: number) => (typeof s === 'string' ? s : '').replace(/\s+/g, ' ').trim().slice(0, n)
 
 export function createHub(opts: HubOptions) {
@@ -146,7 +151,7 @@ export function createHub(opts: HubOptions) {
   const dataDir = opts.dataDir
   const filesDir = join(dataDir, 'files')
   mkdirSync(filesDir, { recursive: true, mode: 0o700 })
-  const db = openDb(join(dataDir, 'hub.sqlite'))
+  const db = openDb(join(dataDir, 'hub.sqlite'), log)
   const vapid = loadVapid(join(dataDir, 'vapid.json'))
   const vapidSubject = opts.vapidSubject ?? 'mailto:bebop@example.com'
   const agentName = opts.agentName ?? 'Bebop'
@@ -195,13 +200,13 @@ export function createHub(opts: HubOptions) {
 
   // ---------- queries ----------
   const q = {
-    insert: db.query(`INSERT INTO messages (ts, sender, source, thread, kind, body_json, reply_to, login, client_id)
-      VALUES ($ts, $sender, $source, $thread, $kind, $body, $reply_to, $login, $client_id) RETURNING *`),
+    insert: db.query(`INSERT INTO messages (ts, sender, source, thread, kind, body_json, reply_to, login, client_id, source_project)
+      VALUES ($ts, $sender, $source, $thread, $kind, $body, $reply_to, $login, $client_id, $source_project) RETURNING *`),
     get: db.query('SELECT * FROM messages WHERE id = ?'),
     byClientId: db.query('SELECT * FROM messages WHERE client_id = ?'),
     setBody: db.query('UPDATE messages SET body_json = ?, edited_at = ? WHERE id = ?'),
     // A voice note waiting for its transcript is held back from the agent.
-    undelivered: db.query(`SELECT * FROM messages WHERE sender = 'user' AND delivered_at IS NULL
+    undelivered: db.query(`SELECT * FROM messages WHERE ${INBOUND} AND delivered_at IS NULL
       AND NOT (kind = 'voice' AND json_extract(body_json, '$.transcript_status') = 'pending') ORDER BY id`),
     file: db.query('SELECT * FROM files WHERE id = ?'),
     insertFile: db.query('INSERT INTO files (id, name, mime, size, path, ts) VALUES (?, ?, ?, ?, ?, ?)'),
@@ -209,7 +214,7 @@ export function createHub(opts: HubOptions) {
     index: db.query('INSERT INTO messages_fts (rowid, body) VALUES (?, ?)'),
     meta: db.query('SELECT * FROM thread_meta WHERE id = ?'),
     putMeta: db.query('INSERT INTO thread_meta (id, title, state, updated) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, state = excluded.state, updated = excluded.updated'),
-    putTopic: db.query('INSERT INTO thread_meta (id, title, lane, detail, history, project, updated) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, lane = excluded.lane, detail = excluded.detail, history = excluded.history, project = excluded.project, updated = MAX(COALESCE(updated, 0), COALESCE(excluded.updated, 0))'),
+    putTopic: db.query('INSERT INTO thread_meta (id, title, lane, detail, history, project, updated) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = excluded.title, lane = excluded.lane, detail = excluded.detail, history = excluded.history, project = excluded.project, closed = NULL, updated = MAX(COALESCE(updated, 0), COALESCE(excluded.updated, 0))'),
     unarchive: db.query(`UPDATE thread_meta SET state = NULL WHERE id = ? AND state = 'archived'`),
   }
   const getMsg = (id: number) => q.get.get(id) as MessageRow | null
@@ -233,11 +238,20 @@ export function createHub(opts: HubOptions) {
     return out
   }
 
-  const fileMeta = (f: FileRow) => ({ id: f.id, name: f.name, mime: f.mime, size: f.size })
+  // A video's size (w, h) from its file, read once per file and kept for the hub's life: the app
+  // gives the video its shape before it loads, so the list doesn't move when it does.
+  const videoSizes = new Map<string, Size | null>()
+  const sizeOf = (f: FileRow) => {
+    if (!f.mime.startsWith('video/')) return null
+    if (!videoSizes.has(f.id)) videoSizes.set(f.id, videoSize(f.path, f.mime))
+    return videoSizes.get(f.id)!
+  }
+  const fileMeta = (f: FileRow) => ({ id: f.id, name: f.name, mime: f.mime, size: f.size, ...sizeOf(f) })
 
   /** The public (user-side) shape of a message. */
   function present(rows: MessageRow[]) {
     const reactions = reactionsFor(rows.map(r => r.id))
+    const projectOfSource = rows.some(r => r.sender === 'agent' && r.source && !r.source_project) ? sourceProjects() : null
     return rows.map(r => {
       const body = bodyOf(r)
       const files = Array.isArray(body.files) ? body.files.map(getFile).filter(Boolean).map(fileMeta) : []
@@ -253,9 +267,37 @@ export function createHub(opts: HubOptions) {
         id: r.id, ts: r.ts, sender: r.sender, source: r.source, thread: r.thread, kind: r.kind, body,
         reply_to: r.reply_to, reply_preview, edited_at: r.edited_at, files,
         reactions: reactions.get(r.id) ?? [],
+        // The sender line: the project of the session the agent passed this on from, if the hub can tell.
+        ...(r.sender === 'agent' && r.source ? { from_project: r.source_project ?? projectOfSource?.(r.source) ?? null } : {}),
         ...(r.client_id ? { client_id: r.client_id } : {}),
       }
     })
+  }
+
+  /**
+   * The project of a session the agent names as a message's source, for the sender line. In order:
+   * the session in the agent's peers list (its own project, so "Rōnin" finds notes-app); else the
+   * name without Claude Code's two-character suffix ("notes-app-6e" → notes-app), the name itself,
+   * or the part before a bracket ("Notes App (sim)" → Notes App), if a peer, a topic or the projects table
+   * knows that project. Case and accents don't count ("Ronin" is "Rōnin"). Else null: the app then shows
+   * the name as given, never the topic's project, which could name the wrong sender.
+   */
+  function sourceProjects(): (source: string) => string | null {
+    const norm = (x: string) => x.replace(/^@/, '').trim().normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+    const peers = new Map<string, string>()
+    for (const p of db.query('SELECT name, project FROM peers WHERE project IS NOT NULL').all() as { name: string; project: string }[]) peers.set(norm(p.name), p.project)
+    const known = new Map<string, string>()
+    const names = db.query(`SELECT project AS name FROM peers WHERE project IS NOT NULL UNION ALL SELECT project FROM thread_meta WHERE project IS NOT NULL
+      UNION ALL SELECT name FROM projects`).all() as { name: string }[]
+    for (const { name } of names) if (name && !known.has(norm(name))) known.set(norm(name), name)
+    return source => {
+      const s = norm(source)
+      if (!s) return null
+      const peer = peers.get(s)
+      if (peer) return peer
+      const base = s.replace(/-[0-9a-f]{2}$/, ''), head = s.replace(/\s*\(.*$/, '')
+      return (base !== s ? known.get(base) : null) ?? known.get(s) ?? (head && head !== s ? peers.get(head) ?? known.get(head) : null) ?? null
+    }
   }
 
   /** What the agent receives for a user message. Includes local file paths. */
@@ -265,8 +307,11 @@ export function createHub(opts: HubOptions) {
       ? body.files.map(getFile).filter(Boolean).map((f: FileRow) => ({ ...fileMeta(f), path: f.path }))
       : []
     const out: Record<string, unknown> = {
-      id: r.id, ts: r.ts, kind: r.kind, thread: r.thread, reply_to: r.reply_to, user: r.login ?? 'user', body, files,
+      id: r.id, ts: r.ts, sender: r.sender, kind: r.kind, thread: r.thread, reply_to: r.reply_to, body, files,
     }
+    // Only the user's own messages carry a user. A peer's note says which project's token sent it.
+    if (r.sender === 'user') out.user = r.login ?? 'user'
+    if (r.sender === 'peer') out.from = { project: r.source }
     if (redelivered.has(r.id)) out.redelivered = true
     if (r.reply_to) {
       const t = getMsg(r.reply_to)
@@ -295,7 +340,7 @@ export function createHub(opts: HubOptions) {
     const ids = [...handed.keys()]
     handed.clear()
     for (const id of ids) redelivered.delete(id)
-    db.query(`UPDATE messages SET delivered_at = ? WHERE sender = 'user' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(Date.now(), ...ids)
+    db.query(`UPDATE messages SET delivered_at = ? WHERE ${INBOUND} AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(Date.now(), ...ids)
   }
   const redeliverTimer = setInterval(() => {
     const now = Date.now()
@@ -321,15 +366,18 @@ export function createHub(opts: HubOptions) {
     }
   }
 
-  function insert(m: { sender: 'user' | 'agent'; kind: string; body: unknown; thread?: string | null; source?: string | null; reply_to?: number | null; login?: string | null; client_id?: string | null }): MessageRow {
+  function insert(m: { sender: Sender; kind: string; body: unknown; thread?: string | null; source?: string | null; reply_to?: number | null; login?: string | null; client_id?: string | null }): MessageRow {
+    const source = m.source ?? null
     const row = q.insert.get({
-      ts: Date.now(), sender: m.sender, source: m.source ?? null, thread: m.thread ?? null, kind: m.kind,
+      ts: Date.now(), sender: m.sender, source, thread: m.thread ?? null, kind: m.kind,
       body: JSON.stringify(m.body), reply_to: m.reply_to ?? null, login: m.login ?? null, client_id: m.client_id ?? null,
+      source_project: m.sender === 'agent' && source ? sourceProjects()(source) : null,
     }) as MessageRow
     if (row.kind !== 'reaction') {
       indexMsg(row)
-      // A new message in an archived thread brings it back. A reaction is not a new message.
-      if (row.thread && q.unarchive.run(row.thread).changes) broadcastUser('threads', threads())
+      // A new message in an archived thread brings it back. A reaction is not a new message, and
+      // a peer's note or a timer is not one for the user: they stay quiet.
+      if (row.thread && (row.sender === 'user' || row.sender === 'agent') && q.unarchive.run(row.thread).changes) broadcastUser('threads', threads())
       if (row.sender === 'agent') setFocus(row.thread)
     }
     return row
@@ -349,6 +397,7 @@ export function createHub(opts: HubOptions) {
   function searchText(r: MessageRow): string {
     if (r.kind === 'answer' || r.kind === 'reaction') return ''
     const b = bodyOf(r)
+    if (r.kind === 'timer' && b.change) return '' // a note to the agent that the user moved or cancelled a timer
     const parts: unknown[] = [b.text, b.transcript, b.prompt, b.detail]
     for (const qq of Array.isArray(b.questions) ? b.questions : []) {
       parts.push(qq.header, qq.prompt)
@@ -480,10 +529,22 @@ export function createHub(opts: HubOptions) {
 
     // answer
     if (target.sender !== 'agent' || (target.kind !== 'question' && target.kind !== 'approval')) return err(400, 'can only answer a question or approval')
+    const tb = bodyOf(target)
+    // A card takes one outcome: the first answer, dismissal or resolve to land wins.
+    if (tb.answered != null) return err(409, 'already answered')
+    if (tb.resolved) return err(409, 'already closed')
+    // Dismissed: the user closed the card without answering. Approves nothing, so no Face ID.
+    if (b.dismiss === true) {
+      tb.resolved = { by: 'user', at: Date.now() }
+      saveBody(target.id, tb, target.edited_at)
+      const row = insert({ sender: 'user', kind: 'answer', body: { to: target.id, dismissed: true }, thread: target.thread, reply_to: null, login, client_id })
+      broadcastUser('update', present([getMsg(target.id)!])[0])
+      broadcastUser('message', present([row])[0])
+      deliverToAgents(row)
+      return json(present([row])[0], 201)
+    }
     // An approval gates a risky action: it needs a fresh Face ID even while unlocked.
     if (target.kind === 'approval' && !lock.steppedUp(req)) return err(403, 'stepup required')
-    const tb = bodyOf(target)
-    if (tb.answered != null) return err(409, 'already answered')
     const answers = b.answers
     if (!answers || typeof answers !== 'object') return err(400, 'answers required')
     if (target.kind === 'question') {
@@ -817,7 +878,7 @@ export function createHub(opts: HubOptions) {
     const before = Number(url.searchParams.get('before')) || 0
     const after = Number(url.searchParams.get('after')) || 0
     const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 50, 1), 200)
-    const where = [`kind != 'reaction'`]
+    const where = [`kind != 'reaction'`, HIDDEN_TIMER_NOTE]
     const args: (string | number)[] = []
     if (thread) { where.push('thread = ?'); args.push(thread) }
     const page = (extra: string, arg: number, order: 'ASC' | 'DESC', n: number) =>
@@ -895,11 +956,12 @@ export function createHub(opts: HubOptions) {
     return line ? (line.length > 60 ? `${line.slice(0, 59).trimEnd()}…` : line) : null
   }
   function threads() {
-    const metas = db.query('SELECT * FROM thread_meta').all() as { id: string; title: string | null; state: string | null; updated: number | null; lane: string | null; detail: string | null; history: string | null; project: string | null }[]
-    const stats = db.query(`SELECT thread, MAX(ts) AS updated FROM messages WHERE thread IS NOT NULL AND kind != 'reaction' GROUP BY thread`).all() as { thread: string; updated: number }[]
+    const metas = db.query('SELECT * FROM thread_meta').all() as { id: string; title: string | null; state: string | null; updated: number | null; lane: string | null; detail: string | null; history: string | null; project: string | null; closed: number | null }[]
+    const stats = db.query(`SELECT thread, MAX(ts) AS updated FROM messages WHERE thread IS NOT NULL AND kind != 'reaction' AND ${HIDDEN_TIMER_NOTE} GROUP BY thread`).all() as { thread: string; updated: number }[]
     const all = lastRead('*')
-    const map = new Map<string, { id: string; title: string; state: string | null; lane: string | null; detail: string | null; history: string[]; project: string | null; updated: number; last: number | null; unread: number }>()
-    for (const m of metas) map.set(m.id, { id: m.id, title: m.title ?? m.id, state: m.state, lane: m.lane, detail: m.detail, history: m.history ? m.history.split('\n') : [], project: m.project, updated: m.updated ?? 0, last: null, unread: 0 })
+    const map = new Map<string, { id: string; title: string; state: string | null; lane: string | null; detail: string | null; history: string[]; project: string | null; closed?: true; updated: number; last: number | null; unread: number }>()
+    // closed: the topic left the agent's list (its task closed) but keeps its project; the app files it under Other.
+    for (const m of metas) map.set(m.id, { id: m.id, title: m.title ?? m.id, state: m.state, lane: m.lane, detail: m.detail, history: m.history ? m.history.split('\n') : [], project: m.project, ...(m.closed && m.project ? { closed: true as const } : {}), updated: m.updated ?? 0, last: null, unread: 0 })
     for (const s of stats) {
       const t = map.get(s.thread) ?? { id: s.thread, title: s.thread, state: null, lane: null, detail: null, history: [], project: null, updated: 0, last: null, unread: 0 }
       t.updated = Math.max(t.updated, s.updated)
@@ -909,6 +971,7 @@ export function createHub(opts: HubOptions) {
     const unreadQ = db.query(`SELECT COUNT(*) AS n FROM messages WHERE sender = 'agent' AND kind != 'reaction' AND thread IS ? AND id > ?`)
     // A project conversation is its own topic: its id says which project, so no task has to.
     for (const t of map.values()) if (t.id.startsWith(PROJECT_THREAD)) {
+      delete t.closed
       t.project ||= t.id.slice(PROJECT_THREAD.length).split('~')[0]
       if (t.title === t.id) t.title = firstLine(t.id) ?? t.title
     }
@@ -916,12 +979,288 @@ export function createHub(opts: HubOptions) {
     for (const o of db.query('SELECT scope_key, thread, title FROM tool_pages WHERE page = ? AND thread IS NOT NULL').all(OVERVIEW_PAGE) as { scope_key: string; thread: string; title: string | null }[]) {
       const t = map.get(o.thread)
       if (!t) continue
-      if (o.scope_key !== DESK) t.project ||= o.scope_key
+      if (o.scope_key !== DESK) { t.project ||= o.scope_key; delete t.closed }
       if (t.title === t.id && o.title) t.title = o.title
     }
     for (const t of map.values()) t.unread = (unreadQ.get(t.id, Math.max(all, lastRead(t.id))) as { n: number }).n
     const general = (unreadQ.get(null, Math.max(all, lastRead(''))) as { n: number }).n
-    return { threads: [...map.values()].sort((a, b) => b.updated - a.updated), general_unread: general, projects: projectIcons() }
+    return { threads: [...map.values()].sort((a, b) => b.updated - a.updated), general_unread: general, projects: projectIcons(), project_links: projectLinks() }
+  }
+
+  // ---------- peers' notes (/peer/tell) ----------
+  // A project session leaves a note for the agent. It goes down the agent's stream as kind "peer",
+  // under the same hand-off rule as the user's messages, and shows quietly in that project's
+  // conversation: no push, no unread count, no typing. The token names the project, never the
+  // request, and opens nothing but /peer/tell. Every session runs as the same user, so this says
+  // which project sent a note; it doesn't keep one session out of another's token file.
+  const PEER_TEXT_MAX = 16_000
+  const PEER_FILES_MAX = 10
+  const PEER_RATE = { n: 20, ms: 10 * 60_000 }
+  const peerDir = join(dataDir, 'peer-tokens')
+  const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
+  const realOr = (p: string) => { try { return realpathSync(p) } catch { return null } }
+  const within = (p: string, root: string) => p === root || p.startsWith(root.endsWith(sep) ? root : root + sep)
+
+  function peerAuth(req: Request): string | null {
+    if (req.headers.has('tailscale-user-login')) return null
+    const h = req.headers.get('authorization') ?? ''
+    const given = h.startsWith('Bearer ') ? h.slice(7).trim() : ''
+    if (!given || given.length > 200) return null
+    const row = db.query('SELECT project FROM peer_tokens WHERE hash = ?').get(sha256(given)) as { project: string } | null
+    return row?.project ?? null
+  }
+  const peerFolders = (project: string) =>
+    (db.query('SELECT folder FROM peer_folders WHERE project = ? ORDER BY folder').all(project) as { folder: string }[]).map(r => r.folder)
+
+  /** A note's file: a real file inside the project's folders, the icon roots (HUB_ICON_ROOTS) or the temp
+   *  folders. Never a hidden file or folder, a *.token, or anything in the hub's own data folder. */
+  function peerFile(p: unknown, project: string): string {
+    if (typeof p !== 'string' || !isAbsolute(p)) throw new Error(`a file must be an absolute path: ${String(p).slice(0, 200)}`)
+    const real = realOr(p)
+    if (!real) throw new Error(`no such file: ${p}`)
+    const data = realOr(dataDir)
+    if (data && within(real, data)) throw new Error(`not allowed: ${p} is in the hub's data folder`)
+    if (/\.token$/i.test(real)) throw new Error(`not allowed: ${p} is a token file`)
+    const roots = [...peerFolders(project), ...(opts.iconRoots ?? [join(homedir(), 'Workspace')]), '/tmp', tmpdir()]
+      .map(realOr).filter((r): r is string => !!r)
+    const root = roots.filter(r => within(real, r)).sort((a, b) => b.length - a.length)[0]
+    if (!root) throw new Error(`not allowed: ${p} is outside the project's folders, the icon roots and the temp folders`)
+    if (relative(root, real).split(sep).some(s => s.startsWith('.'))) throw new Error(`not allowed: ${p} is hidden (a name starting with ".")`)
+    const st = statSync(real)
+    if (!st.isFile()) throw new Error(`not a file: ${p}`)
+    if (st.size > maxUpload) throw new Error(`too big: ${p}`)
+    return real
+  }
+
+  async function peerTell(req: Request, project: string): Promise<Response> {
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    if (!b || typeof b !== 'object' || Array.isArray(b)) return err(400, 'object expected')
+    const text = typeof b.text === 'string' ? b.text : ''
+    if (text.length > PEER_TEXT_MAX) return err(413, `the note is too long (${text.length} characters, at most ${PEER_TEXT_MAX}): put the detail in a file and attach it`)
+    const paths: unknown[] = Array.isArray(b.files) ? b.files : []
+    if (paths.length > PEER_FILES_MAX) return err(400, `at most ${PEER_FILES_MAX} files`)
+    if (!text.trim() && !paths.length) return err(400, 'text or files required')
+    const recent = (db.query(`SELECT COUNT(*) AS n FROM messages WHERE sender = 'peer' AND source = ? AND ts > ?`).get(project, Date.now() - PEER_RATE.ms) as { n: number }).n
+    if (recent >= PEER_RATE.n) return err(429, `too many notes from ${project}: ${PEER_RATE.n} in the last 10 minutes. Wait a few minutes, or put everything in one note.`)
+    let thread = PROJECT_THREAD + project
+    if (typeof b.thread === 'string' && b.thread) {
+      const t = b.thread.slice(0, 200)
+      if (projectOf(t) !== project) return err(400, `${t} isn't one of ${project}'s conversations or topics`)
+      thread = t
+    }
+    // The caller's session name, as bebop tell found it: a claim, shown as one.
+    const session = typeof b.session === 'string' && PEER_NAME.test(b.session.normalize('NFC')) ? b.session.normalize('NFC') : null
+    let real: string[]
+    try { real = paths.map(p => peerFile(p, project)) } catch (e) { return err(400, (e as Error).message) }
+    const files = real.map(copyLocalFile)
+    const row = insert({ sender: 'peer', kind: 'peer', thread, source: project, body: { text, ...(files.length ? { files } : {}), ...(session ? { session } : {}) } })
+    db.query('UPDATE peer_tokens SET last_used = ? WHERE project = ?').run(row.ts, project)
+    broadcastUser('message', present([row])[0])
+    deliverToAgents(row)
+    return json({ id: row.id, thread }, 201)
+  }
+
+  // The agent makes a project's token (once, or again with rotate) and names the folders its
+  // sessions run in. The hub keeps the token's hash and writes the token for bebop tell to
+  // data/peer-tokens/<project>.token, and the folders (no secrets) to data/peer-tokens/folders.json.
+  function writeFolderMap() {
+    mkdirSync(peerDir, { recursive: true, mode: 0o700 })
+    const rows = db.query('SELECT folder, project FROM peer_folders ORDER BY folder').all() as { folder: string; project: string }[]
+    const tmp = join(peerDir, `folders.json.${process.pid}.tmp`)
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(rows.map(r => [r.folder, r.project])), null, 2) + '\n', { mode: 0o600 })
+    renameSync(tmp, join(peerDir, 'folders.json'))
+  }
+  const tokenFileOf = (project: string) => join(peerDir, `${project}.token`)
+  function peerTokenList() {
+    const rows = db.query('SELECT project, created, last_used FROM peer_tokens ORDER BY project').all() as { project: string; created: number; last_used: number | null }[]
+    return rows.map(r => ({ ...r, folders: peerFolders(r.project), token_file: tokenFileOf(r.project) }))
+  }
+  async function agentPeerToken(req: Request): Promise<Response> {
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    const project = typeof b?.project === 'string' ? b.project.normalize('NFC').trim().toLowerCase() : ''
+    if (!PEER_NAME.test(project)) return err(400, 'project: its name as in the app (letters, digits, _ . -)')
+    const given: unknown[] | null = Array.isArray(b.folders) ? b.folders : b.folder != null ? [b.folder] : null
+    let folders: string[] | null = null
+    if (given) {
+      folders = []
+      for (const f of given) {
+        const real = typeof f === 'string' && isAbsolute(f) ? realOr(f) : null
+        if (!real || !statSync(real).isDirectory()) return err(400, `not a folder (an absolute path is needed): ${String(f).slice(0, 200)}`)
+        if (real === '/' || real === realOr(homedir())) return err(400, `too wide for one project: ${real}`)
+        const other = db.query('SELECT project FROM peer_folders WHERE folder = ? AND project != ?').get(real, project) as { project: string } | null
+        if (other) return err(409, `${real} is already ${other.project}'s folder`)
+        if (!folders.includes(real)) folders.push(real)
+      }
+      if (!folders.length) return err(400, 'at least one folder')
+    }
+    const had = !!db.query('SELECT 1 FROM peer_tokens WHERE project = ?').get(project)
+    if (!had && !folders) return err(400, 'folders required: where this project\'s sessions run')
+    const token = !had || b.rotate === true ? randomBytes(32).toString('hex') : null
+    const tmp = join(peerDir, `${project}.token.${process.pid}.tmp`)
+    if (token) {
+      mkdirSync(peerDir, { recursive: true, mode: 0o700 })
+      writeFileSync(tmp, token + '\n', { mode: 0o600 })
+    }
+    db.transaction(() => {
+      if (token) db.query(`INSERT INTO peer_tokens (project, hash, created) VALUES (?, ?, ?)
+        ON CONFLICT(project) DO UPDATE SET hash = excluded.hash, created = excluded.created, last_used = NULL`).run(project, sha256(token), Date.now())
+      if (folders) {
+        db.query('DELETE FROM peer_folders WHERE project = ?').run(project)
+        for (const f of folders) db.query('INSERT INTO peer_folders (folder, project) VALUES (?, ?)').run(f, project)
+      }
+    })()
+    if (token) renameSync(tmp, tokenFileOf(project))
+    writeFolderMap()
+    return json({ ok: true, project, made: !had, rotated: had && !!token, folders: peerFolders(project), token_file: tokenFileOf(project) }, had ? 200 : 201)
+  }
+  async function agentPeerRevoke(req: Request): Promise<Response> {
+    const b = await req.json().catch(() => null) as { project?: unknown } | null
+    const project = typeof b?.project === 'string' ? b.project.normalize('NFC').trim().toLowerCase() : ''
+    if (!project) return err(400, 'project required')
+    const n = db.transaction(() => {
+      db.query('DELETE FROM peer_folders WHERE project = ?').run(project)
+      return db.query('DELETE FROM peer_tokens WHERE project = ?').run(project).changes
+    })()
+    rmSync(tokenFileOf(project), { force: true })
+    writeFolderMap()
+    return json({ ok: true, project, revoked: n > 0 })
+  }
+
+  // ---------- the clock ----------
+  // Timers live in SQLite. When one is due the hub puts a kind "timer" note in the agent's inbox
+  // (same stream, same hand-off rule) in one transaction with moving the timer on, so a firing
+  // happens once, and one missed while the hub was down happens at its next start (late).
+  // The agent sets, lists and cancels them; the user sees them in the app and can move or cancel
+  // one, which tells the agent with a note of its own (never shown in a conversation).
+  const TIMER_TEXT_MAX = 2000
+  const TIMER_LATE_MS = 60_000
+  const TIMER_AHEAD_MS = 5 * 366 * 86_400_000
+  const AT_HELP = 'at: ms since the epoch, or a date and time ("2026-11-18T09:00", local time unless it ends in Z or an offset)'
+  let clockTimer: ReturnType<typeof setTimeout> | undefined
+  let clockStopped = false
+  const getTimer = (id: number) => db.query('SELECT * FROM timers WHERE id = ?').get(id) as TimerRow | null
+  const timerOut = (t: TimerRow) => ({ ...t, due_local: localIso(t.due) })
+  function timerList(all = false): TimerRow[] {
+    return (all
+      ? db.query(`SELECT * FROM timers WHERE state = 'scheduled' OR COALESCE(changed, fired, created) > ? ORDER BY state = 'scheduled' DESC, due, id`).all(Date.now() - 30 * 86_400_000)
+      : db.query(`SELECT * FROM timers WHERE state = 'scheduled' ORDER BY due, id`).all()) as TimerRow[]
+  }
+  function timersChanged() {
+    broadcastUser('timers', { timers: timerList().map(timerOut) })
+    armClock()
+  }
+  function armClock() {
+    clearTimeout(clockTimer)
+    if (clockStopped) return
+    const next = (db.query(`SELECT MIN(due) AS due FROM timers WHERE state = 'scheduled'`).get() as { due: number | null }).due
+    if (next == null) return
+    // Look again at least every minute: a sleeping Mac or a clock change can make a long wait wrong.
+    clockTimer = setTimeout(fireDue, Math.max(0, Math.min(next - Date.now(), 60_000)))
+  }
+  function fireDue() {
+    const now = Date.now()
+    const due = db.query(`SELECT * FROM timers WHERE state = 'scheduled' AND due <= ? ORDER BY due, id`).all(now) as TimerRow[]
+    for (const t of due) {
+      const row = db.transaction(() => {
+        const fresh = getTimer(t.id)
+        if (!fresh || fresh.state !== 'scheduled' || fresh.due > now) return null // moved or cancelled meanwhile
+        const late = now - fresh.due > TIMER_LATE_MS
+        const body = { text: fresh.text, timer: fresh.id, due: fresh.due, fires: fresh.fires + 1, ...(fresh.repeat ? { repeat: fresh.repeat } : {}), ...(fresh.key ? { key: fresh.key } : {}), ...(late ? { late: true } : {}) }
+        const r = insert({ sender: 'clock', kind: 'timer', body, thread: fresh.thread })
+        const next = fresh.repeat ? nextDue(fresh.due, fresh.repeat, now) : null
+        db.query(`UPDATE timers SET fired = ?, fires = fires + 1, due = ?, state = ? WHERE id = ?`).run(now, next ?? fresh.due, next ? 'scheduled' : 'done', fresh.id)
+        return r
+      })()
+      if (!row) continue
+      if (now - t.due > TIMER_LATE_MS) log(`hub: timer ${t.id} was due ${localIso(t.due)}; fired late`)
+      broadcastUser('message', present([row])[0])
+      deliverToAgents(row)
+    }
+    if (due.length) timersChanged()
+    else armClock()
+  }
+  function timerInput(b: any): { text: string; due: number; repeat: string | null; thread: string | null; key: string | null } | string {
+    const text = typeof b?.text === 'string' ? b.text.trim() : ''
+    if (!text) return 'text required'
+    if (text.length > TIMER_TEXT_MAX) return `text: at most ${TIMER_TEXT_MAX} characters`
+    const due = parseAt(b.at)
+    if (due == null) return AT_HELP
+    const now = Date.now()
+    if (due < now - 60_000) return `at is in the past (${localIso(due)})`
+    if (due > now + TIMER_AHEAD_MS) return 'at is more than five years away'
+    let repeat: string | null
+    try { repeat = parseRepeat(b.repeat) } catch (e) { return (e as Error).message }
+    const thread = typeof b.thread === 'string' && b.thread ? b.thread.slice(0, 200) : null
+    const key = typeof b.key === 'string' && b.key.trim() ? b.key.trim().slice(0, 100) : null
+    return { text, due, repeat, thread, key }
+  }
+  // POST /agent/timers {text, at, repeat?, thread?, key?, id?}: sets a timer. With the id of a
+  // scheduled one, or a key a scheduled one has, it replaces that one (moves it, rewords it).
+  async function agentTimer(req: Request): Promise<Response> {
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    const v = timerInput(b)
+    if (typeof v === 'string') return err(400, v)
+    let existing: TimerRow | null = null
+    if (b.id != null) {
+      existing = Number.isInteger(b.id) ? getTimer(b.id) : null
+      if (!existing || existing.state !== 'scheduled') return err(404, 'no scheduled timer with that id')
+    } else if (v.key) {
+      existing = db.query(`SELECT * FROM timers WHERE key = ? AND state = 'scheduled'`).get(v.key) as TimerRow | null
+    }
+    const now = Date.now()
+    let id: number
+    if (existing) {
+      if (v.key && v.key !== existing.key && db.query(`SELECT 1 FROM timers WHERE key = ? AND state = 'scheduled' AND id != ?`).get(v.key, existing.id)) return err(409, `another timer has the key ${v.key}`)
+      db.query(`UPDATE timers SET text = ?, due = ?, repeat = ?, thread = ?, key = COALESCE(?, key), changed_by = 'agent', changed = ? WHERE id = ?`)
+        .run(v.text, v.due, v.repeat, v.thread, v.key, now, existing.id)
+      id = existing.id
+    } else {
+      id = (db.query(`INSERT INTO timers (text, due, repeat, thread, key, state, created) VALUES (?, ?, ?, ?, ?, 'scheduled', ?) RETURNING id`)
+        .get(v.text, v.due, v.repeat, v.thread, v.key, now) as { id: number }).id
+    }
+    timersChanged()
+    return json({ ok: true, replaced: !!existing, ...timerOut(getTimer(id)!) }, existing ? 200 : 201)
+  }
+  // POST /agent/timers/cancel {id | key}: 200 either way, saying how many it cancelled.
+  async function agentTimerCancel(req: Request): Promise<Response> {
+    const b = await req.json().catch(() => null) as { id?: unknown; key?: unknown } | null
+    const byId = Number.isInteger(b?.id)
+    const key = typeof b?.key === 'string' && b.key.trim() ? b.key.trim() : null
+    if (!byId && !key) return err(400, 'id or key required')
+    const rows = (byId
+      ? db.query(`SELECT * FROM timers WHERE id = ? AND state = 'scheduled'`).all(b!.id as number)
+      : db.query(`SELECT * FROM timers WHERE key = ? AND state = 'scheduled'`).all(key)) as TimerRow[]
+    const now = Date.now()
+    for (const t of rows) db.query(`UPDATE timers SET state = 'cancelled', changed_by = 'agent', changed = ? WHERE id = ?`).run(now, t.id)
+    if (rows.length) timersChanged()
+    return json({ ok: true, cancelled: rows.length, ids: rows.map(t => t.id) })
+  }
+  // The user moves (POST /api/timers/:id {at}) or cancels (POST /api/timers/:id/cancel) a timer.
+  // The agent hears of it: a kind "timer" note with change "moved" or "cancelled", by that login.
+  async function userTimer(req: Request, id: number, cancel: boolean, login: string): Promise<Response> {
+    const t = getTimer(id)
+    if (!t || t.state !== 'scheduled') return err(404, 'no scheduled timer with that id')
+    const now = Date.now()
+    let due = t.due
+    if (!cancel) {
+      const b = await req.json().catch(() => null) as { at?: unknown } | null
+      const at = parseAt(b?.at)
+      if (at == null) return err(400, AT_HELP)
+      if (at < now - 60_000) return err(400, 'that time has passed')
+      if (at > now + TIMER_AHEAD_MS) return err(400, 'more than five years away')
+      due = at
+    }
+    const row = db.transaction(() => {
+      db.query(`UPDATE timers SET state = ?, due = ?, changed_by = 'user', changed = ? WHERE id = ?`).run(cancel ? 'cancelled' : 'scheduled', due, now, id)
+      const body = { timer: id, text: t.text, change: cancel ? 'cancelled' : 'moved', due, ...(cancel ? {} : { was: t.due }), ...(t.repeat ? { repeat: t.repeat } : {}), ...(t.key ? { key: t.key } : {}), by: login }
+      return insert({ sender: 'clock', kind: 'timer', body, thread: t.thread, login })
+    })()
+    deliverToAgents(row)
+    timersChanged()
+    return json({ ok: true, ...timerOut(getTimer(id)!) })
   }
 
   // ---------- agent handlers ----------
@@ -1013,6 +1352,31 @@ export function createHub(opts: HubOptions) {
     return json({ id: row.id })
   }
 
+  // The agent closes a question or approval it sent that no longer needs an answer: the card greys
+  // out with the reason (and a link to the card that replaces it) and can't be answered. Always 200
+  // for a card, saying how it ended, since an answer can land first: closed true, or false with
+  // state "answered" (and the answer) or "dismissed" (the user closed it).
+  async function agentResolve(req: Request): Promise<Response> {
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    const target = Number.isInteger(b?.id) ? getMsg(b.id) : null
+    if (!target || target.sender !== 'agent' || (target.kind !== 'question' && target.kind !== 'approval')) return err(404, 'question or approval not found')
+    const tb = bodyOf(target)
+    if (tb.answered != null) return json({ ok: true, id: target.id, closed: false, state: 'answered', answered: tb.answered, ...(tb.answered_note ? { answered_note: tb.answered_note } : {}) })
+    if (tb.resolved) return json({ ok: true, id: target.id, closed: tb.resolved.by === 'agent', already: true, state: tb.resolved.by === 'agent' ? 'resolved' : 'dismissed', resolved: tb.resolved })
+    let superseded_by: number | null = null
+    if (b.superseded_by != null) {
+      const s = Number.isInteger(Number(b.superseded_by)) ? getMsg(Number(b.superseded_by)) : null
+      if (!s || s.id === target.id) return err(400, 'superseded_by: message not found')
+      superseded_by = s.id
+    }
+    const reason = typeof b.reason === 'string' && b.reason.trim() ? b.reason.trim().slice(0, 200) : null
+    tb.resolved = { by: 'agent', at: Date.now(), ...(reason ? { reason } : {}), ...(superseded_by ? { superseded_by } : {}) }
+    saveBody(target.id, tb, target.edited_at)
+    broadcastUser('update', present([getMsg(target.id)!])[0])
+    return json({ ok: true, id: target.id, closed: true, state: 'resolved', resolved: tb.resolved })
+  }
+
   async function agentReact(req: Request): Promise<Response> {
     let b: any
     try { b = await req.json() } catch { return err(400, 'invalid json') }
@@ -1054,8 +1418,10 @@ export function createHub(opts: HubOptions) {
     try { b = await req.json() } catch { return err(400, 'invalid json') }
     const list = Array.isArray(b) ? b : b?.topics
     if (!Array.isArray(list)) return err(400, 'array of topics expected')
+    // A topic that leaves the list (its task closed) loses its lane, detail and history, but keeps its
+    // project: it still belongs there. `closed` notes when it left; listing it again clears that.
     db.transaction(() => {
-      db.exec('UPDATE thread_meta SET lane = NULL, detail = NULL, history = NULL, project = NULL')
+      db.query('UPDATE thread_meta SET lane = NULL, detail = NULL, history = NULL, closed = COALESCE(closed, ?)').run(Date.now())
       for (const t of list) {
         if (!t?.id) continue
         const upd = typeof t.updated === 'number' ? t.updated : t.updated ? Date.parse(t.updated) || null : null
@@ -1067,11 +1433,68 @@ export function createHub(opts: HubOptions) {
     return json({ ok: true, count: list.length })
   }
 
+  // POST /agent/topics/project {"<topic id>": "<project>" | null, …}: set the project of topics that are
+  // not in the list any more (closed tasks). A topic in the list gets its project from the next
+  // /agent/topics instead. A topic the hub has never seen is not made: it's returned in `unknown`.
+  async function agentTopicProjects(req: Request): Promise<Response> {
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    const map = b && typeof b === 'object' && !Array.isArray(b) ? (b.topics && typeof b.topics === 'object' && !Array.isArray(b.topics) ? b.topics : b) : null
+    if (!map) return err(400, 'an object {"<topic id>": "<project>" | null} expected')
+    const entries = Object.entries(map)
+    if (entries.length > 1000) return err(413, 'at most 1000 topics at a time')
+    for (const [id, p] of entries) {
+      if (!id || id.length > 200) return err(400, `topic id: 1 to 200 characters (${id.slice(0, 40)}…)`)
+      if (p !== null && (typeof p !== 'string' || !p.trim() || p.length > 100)) return err(400, `${id}: the project is a name up to 100 characters, or null to clear it`)
+    }
+    // Such a topic is closed (no lane); marked so in case no /agent/topics has run since this build.
+    const set = db.query(`INSERT INTO thread_meta (id, project, closed) VALUES ($id, $project, $now)
+      ON CONFLICT(id) DO UPDATE SET project = excluded.project, closed = CASE WHEN lane IS NULL THEN COALESCE(closed, $now) ELSE closed END`)
+    const unknown: string[] = []
+    let n = 0
+    db.transaction(() => {
+      for (const [id, p] of entries) {
+        if (!threadExists(id)) { unknown.push(id); continue }
+        set.run({ id, project: p === null ? null : (p as string).trim(), now: Date.now() }); n++
+      }
+    })()
+    if (n) broadcastUser('threads', threads())
+    noteProjects(entries.flatMap(([, p]) => typeof p === 'string' ? [{ project: p.trim() }] : [])).catch(() => {})
+    return json({ ok: true, count: n, unknown })
+  }
+
   // Projects: a folder and an icon per project name, for one with topics but no peer in the
   // peers table. The folder comes from the topic's `path`, else from looking the name up under
   // the icon roots. Runs after the reply (bin/task posts with a short timeout, and a folder walk
   // can be slow) and announces the icons when they change.
   const PROJECT_RECHECK = 10 * 60 * 1000
+  /** Each project's "Open app" link: {key: {url, label}}. */
+  function projectLinks() {
+    const rows = db.query('SELECT key, url, label FROM project_links').all() as { key: string; url: string; label: string | null }[]
+    return Object.fromEntries(rows.map(r => [r.key, { url: r.url, label: r.label }]))
+  }
+  // POST /agent/projects/:name/link and /api/projects/:key/link {url, label?}: set the project's "Open app"
+  // link; url null or "" removes it. Only https, or http on this machine.
+  async function projectLinkApi(req: Request, name: string): Promise<Response> {
+    let b: any
+    try { b = await req.json() } catch { return err(400, 'invalid json') }
+    if (!b || typeof b !== 'object' || Array.isArray(b)) return err(400, 'object expected')
+    const key = name.trim().toLowerCase()
+    if (!key || key.length > 100) return err(400, 'project name expected')
+    if (b.url == null || b.url === '') {
+      db.query('DELETE FROM project_links WHERE key = ?').run(key)
+      broadcastUser('threads', threads())
+      return json({ ok: true, project: key, link: null })
+    }
+    let u: URL
+    try { u = new URL(String(b.url)) } catch { return err(400, 'url must be a full https:// link') }
+    const local = u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
+    if ((u.protocol !== 'https:' && !local) || u.username || u.password || u.href.length > 500) return err(400, 'url must be https (or http on this machine), at most 500 characters')
+    const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim().slice(0, 24) : null
+    db.query('INSERT OR REPLACE INTO project_links (key, url, label, updated) VALUES (?, ?, ?, ?)').run(key, u.href, label, Date.now())
+    broadcastUser('threads', threads())
+    return json({ ok: true, project: key, link: { url: u.href, label } })
+  }
   function projectIcons() {
     const rows = db.query('SELECT name, icon FROM projects WHERE icon IS NOT NULL').all() as { name: string; icon: string }[]
     return Object.fromEntries(rows.map(r => [r.name.toLowerCase(), `api/icons/${r.icon}`]))
@@ -1321,7 +1744,7 @@ export function createHub(opts: HubOptions) {
       broadcastUser('panes', { panes: withShellModes(list), updated: new Date(updated).toISOString() })
       noteProjects(list.map(p => ({ project: p.project, path: p.cwd }))).catch(() => {})
     },
-    onBlocked: p => sendPush({ title: p.title, body: 'Waiting for you', thread: null, id: null, tag: `pane:${p.id}`, pane: p.id, url: `/?pane=${encodeURIComponent(p.id)}` }),
+    onBlocked: p => sendPush({ title: (p.project ?? '').toLowerCase() === agentName.toLowerCase() ? agentName : p.title, body: 'Waiting for you', thread: null, id: null, tag: `pane:${p.id}`, pane: p.id, url: `/?pane=${encodeURIComponent(p.id)}` }),
     ...opts.paneTiming,
     log,
   })
@@ -1632,6 +2055,14 @@ export function createHub(opts: HubOptions) {
       const path = url.pathname
       const method = req.method
 
+      // A project session's note for the agent: a peer token opens this one route and nothing else.
+      if (path.startsWith('/peer/')) {
+        const project = peerAuth(req)
+        if (!project) return err(401, 'unauthorized')
+        if (method === 'POST' && path === '/peer/tell') return peerTell(req, project)
+        return err(404, 'not found')
+      }
+
       if (path.startsWith('/agent/')) {
         if (!agentAuth(req)) return err(401, 'unauthorized')
         if (method === 'GET' && path === '/agent/stream') {
@@ -1668,7 +2099,7 @@ export function createHub(opts: HubOptions) {
           const ids = Array.isArray(b?.ids) ? b!.ids.filter(Number.isInteger) as number[] : []
           const newest = ids.length ? db.query(`SELECT thread FROM messages WHERE sender = 'user' AND kind != 'reaction' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 1`).get(...ids) as { thread: string | null } | null : null
           if (newest) setFocus(newest.thread)
-          const live = ids.length ? (db.query(`SELECT id FROM messages WHERE sender = 'user' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).all(...ids) as { id: number }[]) : []
+          const live = ids.length ? (db.query(`SELECT id FROM messages WHERE ${INBOUND} AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).all(...ids) as { id: number }[]) : []
           const now = Date.now()
           for (const { id } of live) handed.set(id, now)
           return json({ ok: true, handed: live.length })
@@ -1679,7 +2110,7 @@ export function createHub(opts: HubOptions) {
           // The newest message it hadn't seen says what it's on now. A reaction isn't a turn.
           const newest = ids.length ? db.query(`SELECT thread FROM messages WHERE sender = 'user' AND kind != 'reaction' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 1`).get(...ids) as { thread: string | null } | null : null
           if (newest) setFocus(newest.thread)
-          if (ids.length) db.query(`UPDATE messages SET delivered_at = ? WHERE sender = 'user' AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(Date.now(), ...ids)
+          if (ids.length) db.query(`UPDATE messages SET delivered_at = ? WHERE ${INBOUND} AND delivered_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`).run(Date.now(), ...ids)
           for (const id of ids) { handed.delete(id); redelivered.delete(id) }
           return json({ ok: true, acked: ids.length })
         }
@@ -1687,8 +2118,12 @@ export function createHub(opts: HubOptions) {
         if (method === 'POST' && path === '/agent/upload') return upload(req)
         if (method === 'POST' && path === '/agent/update') return agentUpdate(req)
         if (method === 'POST' && path === '/agent/react') return agentReact(req)
+        if (method === 'POST' && path === '/agent/resolve') return agentResolve(req)
         if (method === 'POST' && path === '/agent/threads') return agentThreads(req)
         if (method === 'POST' && path === '/agent/topics') return agentTopics(req)
+        if (method === 'POST' && path === '/agent/topics/project') return agentTopicProjects(req)
+        const pl = /^\/agent\/projects\/([^/]{1,300})\/link$/.exec(path)
+        if (method === 'POST' && pl) return projectLinkApi(req, decodeURIComponent(pl[1]))
         const mm = /^\/agent\/threads\/([^/]{1,200})\/messages$/.exec(path)
         if (method === 'POST' && mm) return agentMoveMessages(req, decodeURIComponent(mm[1]))
         const tm = /^\/agent\/threads\/([^/]{1,200})$/.exec(path)
@@ -1697,6 +2132,12 @@ export function createHub(opts: HubOptions) {
         if (method === 'POST' && path === '/agent/peers') return agentPeers(req)
         if (method === 'POST' && path === '/agent/presence') return agentPresence(req)
         if (method === 'POST' && path === '/agent/tasks') return agentTasks(req)
+        if (method === 'POST' && path === '/agent/peer-tokens') return agentPeerToken(req)
+        if (method === 'GET' && path === '/agent/peer-tokens') return json(peerTokenList())
+        if (method === 'POST' && path === '/agent/peer-tokens/revoke') return agentPeerRevoke(req)
+        if (method === 'POST' && path === '/agent/timers') return agentTimer(req)
+        if (method === 'GET' && path === '/agent/timers') return json({ timers: timerList(url.searchParams.get('all') === '1').map(timerOut) })
+        if (method === 'POST' && path === '/agent/timers/cancel') return agentTimerCancel(req)
         if (method === 'GET' && path === '/agent/history') return agentHistory(url)
         // Each tool's instructions for the agent, from its manifest (operator-installed, capped).
         if (method === 'GET' && path === '/agent/tools') return json([...tools.values()].map(t => ({
@@ -1750,8 +2191,19 @@ export function createHub(opts: HubOptions) {
           if (method === 'GET' || method === 'POST') return iconApi(req)
         }
         if (method === 'GET' && path === '/api/companion') return companionApi()
+        const upl = /^\/api\/projects\/([^/]{1,300})\/link$/.exec(path)
+        if (method === 'POST' && upl) {
+          if (req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header required')
+          return projectLinkApi(req, decodeURIComponent(upl[1]))
+        }
         if (method === 'GET' && path === '/api/companion/file') return companionFile(url.searchParams.get('name') ?? '')
         if (method === 'GET' && path === '/api/tasks') return json(tasks())
+        if (method === 'GET' && path === '/api/timers') return json({ timers: timerList().map(timerOut) })
+        const tmr = /^\/api\/timers\/(\d{1,12})(\/cancel)?$/.exec(path)
+        if (method === 'POST' && tmr) {
+          if (req.headers.get('x-hub-action') !== '1') return err(403, 'X-Hub-Action header required')
+          return userTimer(req, Number(tmr[1]), !!tmr[2], login)
+        }
         if (method === 'POST' && path === '/api/read') {
           const b = await req.json().catch(() => null) as { thread?: string | null; last_id?: number } | null
           if (!b || !Number.isInteger(b.last_id)) return err(400, 'last_id required')
@@ -1798,6 +2250,8 @@ export function createHub(opts: HubOptions) {
     },
   })
 
+  armClock() // fires any timer that came due while the hub was down
+
   if ([...tools.values()].some(t => t.entry?.run)) {
     supervisor = superviseTools([...tools.values()], {
       ...opts.toolRun,
@@ -1819,6 +2273,8 @@ export function createHub(opts: HubOptions) {
       panes?.stop()
       for (const c of userClients) c.close()
       clearInterval(redeliverTimer)
+      clockStopped = true
+      clearTimeout(clockTimer)
       for (const c of agentClients.keys()) c.close()
       server.stop(true)
       db.close()

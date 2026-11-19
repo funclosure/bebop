@@ -6,7 +6,8 @@
  * --dangerously-load-development-channels, which asks for confirmation on
  * every launch and so blocks an unattended relaunch. Instead the agent runs
  * this in the background (Bash run_in_background): it waits on the hub's
- * stream, prints the first user message(s) as <channel> tags, tells the hub it
+ * stream, prints the first message(s) as <channel> tags (the user's, a peer's note, a
+ * timer going off: whatever the stream carries), tells the hub it
  * handed them over (/agent/handed; the hub marks them received at the agent's next
  * sign of life, and offers them again after 2 min without one), and exits. The exit wakes the agent, which reads the
  * output and starts the watcher again. Run server.ts with HUB_INBOUND=off

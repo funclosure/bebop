@@ -44,7 +44,7 @@ test('declares the channel capability and lists the tools', async () => {
   expect(caps?.experimental?.['claude/channel']).toEqual({})
   expect(caps?.experimental?.['claude/channel/permission']).toBeUndefined()
   const tools = (await client.listTools()).tools.map(t => t.name).sort()
-  expect(tools).toEqual(['approve', 'ask', 'history', 'presence', 'progress', 'react', 'reply', 'set_commands', 'set_peers', 'set_tasks', 'set_threads'])
+  expect(tools).toEqual(['approve', 'ask', 'cancel_timer', 'history', 'presence', 'progress', 'react', 'reply', 'resolve', 'schedule', 'set_commands', 'set_peers', 'set_tasks', 'set_threads', 'timers'])
   expect(client.getInstructions()).toContain('<channel source="hub"')
 })
 

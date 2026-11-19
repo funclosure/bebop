@@ -373,6 +373,12 @@ test('icons: Xcode source takes the main target, default appearance, largest ima
   ])
   expect(xcodeIcon.find(d)).toBe(join(d, 'App/Assets.xcassets/AppIcon.appiconset/big.png'))
   expect(webIcon.find(d)).toBeNull()
+  // A site that keeps its icons in public/favicon/ (the favicon generators' layout).
+  mkdirSync(join(d, 'public/favicon'), { recursive: true })
+  writeFileSync(join(d, 'public/favicon/android-chrome-512x512.png'), 'x')
+  expect(webIcon.find(d)).toBe(join(d, 'public/favicon/android-chrome-512x512.png'))
+  writeFileSync(join(d, 'public/favicon/apple-touch-icon.png'), 'x')
+  expect(webIcon.find(d)).toBe(join(d, 'public/favicon/apple-touch-icon.png'))
 })
 
 test('projects: a topic carries its project, and one with no peer still gets an icon', async () => {
@@ -402,11 +408,13 @@ test('projects: a topic carries its project, and one with no peer still gets an 
   expect(t.projects.custom).toMatch(/^api\/icons\//)
   expect(t.projects['no-such-folder']).toBeUndefined()
   expect((await h.user('/' + t.projects.myapp)).status).toBe(200)
-  // Left out of the next list: no project, like lane and detail.
+  // Left out of the next list: closed. Lane and detail go; the project stays (see topic-projects.test.ts).
   await h.agent('/agent/topics', { method: 'POST', body: JSON.stringify([{ id: 'c', title: 'C', lane: 'others', project: 'myapp' }]) })
   const t2 = await threads()
-  expect(t2.threads.find((x: any) => x.id === 'a').project).toBeNull()
+  const a = t2.threads.find((x: any) => x.id === 'a')
+  expect([a.project, a.lane, a.closed]).toEqual(['myapp', null, true])
   expect(t2.threads.find((x: any) => x.id === 'c').project).toBe('myapp')
+  expect(t2.threads.find((x: any) => x.id === 'c').closed).toBeUndefined()
   h.hub.stop()
 })
 

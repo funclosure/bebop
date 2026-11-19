@@ -1,0 +1,13 @@
+{
+  "bebop": 1,
+  "id": "sketch",
+  "name": "Sketch",
+  "version": "0.1.0",
+  "description": "A plain whiteboard per topic: draw with a finger or pen, then send a picture of it into the topic.",
+  "icon": "icon.svg",
+  "scope": "topic",
+  "frame": { "url": "/s/{instance}?host=bebop", "link": "/s/{instance}" },
+  "ref": ["sketch"],
+  "serve": { "command": ["bun", "server.ts"], "port": 5180, "health": "/healthz" },
+  "agent": { "instructions": "Sketch posts a picture of the user's whiteboard for the topic: sketch_id is the topic's board, sketch.png the drawing, and the message text says what they want. Look at the image and answer in the topic." }
+}

@@ -1,0 +1,3 @@
+#!/bin/sh
+# bebop: commands for any project session (see channel/tell.ts). Link it onto PATH; it follows the link home.
+exec bun "$(dirname "$(realpath "$0")")/../channel/tell.ts" "$@"

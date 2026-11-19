@@ -128,6 +128,6 @@ export const markDataUrl = (name, seed = 0, kind = 'icon') => 'data:image/svg+xm
 /** A name's initials, for a project without an icon: the first letters of its first two words
  *  ("Paper Boat" → PB, "night-owl" → NO, "LampPost" → LP); one word, one letter. */
 export function initials(name) {
-  const words = String(name ?? '').normalize('NFC').replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').split(/[\s_.-]+/u).filter(Boolean)
+  const words = String(name ?? '').normalize('NFC').replace(/(\p{Ll})(\p{Lu})/gu, '$1 $2').split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean)
   return words.slice(0, 2).map(w => [...w][0].toUpperCase()).join('') || '?'
 }

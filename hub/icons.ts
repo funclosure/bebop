@@ -48,8 +48,8 @@ export const xcodeIcon: IconSource = {
   },
 }
 
-const WEB_DIRS = ['public', 'app/public', 'web', 'web/icons', 'src/web', 'src/web/static', 'static', 'website/assets/img', 'assets/img']
-const WEB_FILES = ['apple-touch-icon.png', 'icon-512.png', 'icon-192.png', 'favicon.svg', 'favicon.png', 'favicon.ico']
+const WEB_DIRS = ['public', 'public/favicon', 'app/public', 'web', 'web/icons', 'src/web', 'src/web/static', 'static', 'website/assets/img', 'assets/img']
+const WEB_FILES = ['apple-touch-icon.png', 'icon-512.png', 'icon-192.png', 'android-chrome-512x512.png', 'favicon.svg', 'favicon.png', 'favicon.ico']
 
 /** A web app: the home-screen icon if it has one, otherwise its favicon. */
 export const webIcon: IconSource = {

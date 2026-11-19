@@ -112,6 +112,21 @@ test('watcher: a push on the transition into blocked, at most one per pane per g
   expect(pushed).toEqual(['b', 'a', 'b', 'c'])
 })
 
+test('watcher: each pane carries when its state or title last changed (the app sorts by it)', () => {
+  let clock = 5_000
+  const w = createPaneWatcher({ provider: null as unknown as PaneProvider, watched: () => false, onChange: () => {}, onBlocked: () => {}, now: () => clock })
+  const pane = (id: string, status: Pane['status'], title = id): Pane => ({ id, title, agent: 'claude', status, cwd: null, project: null, focused: false })
+  w.observe([pane('a', 'idle'), pane('b', 'idle')])
+  const at = () => Object.fromEntries(w.current().panes.map(p => [p.id, p.changed]))
+  expect(at()).toEqual({ a: 5_000, b: 5_000 })
+  clock = 8_000; w.observe([pane('a', 'working'), pane('b', 'idle')])
+  expect(at()).toEqual({ a: 8_000, b: 5_000 })
+  clock = 9_000; w.observe([pane('a', 'working'), pane('b', 'idle', 'b: new task')])
+  expect(at()).toEqual({ a: 8_000, b: 9_000 })
+  clock = 12_000; w.observe([pane('a', 'working'), pane('b', 'idle', 'b: new task'), pane('c', 'idle')])
+  expect(at()).toEqual({ a: 8_000, b: 9_000, c: 12_000 })
+})
+
 // ---------- the HTTP side, with a fake provider ----------
 function fakeProvider() {
   const state = {

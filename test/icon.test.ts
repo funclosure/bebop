@@ -154,6 +154,8 @@ test('projects without an icon show initials; only Bebop keeps the mark; session
   expect(initials('Locus')).toBe('L')
   expect(initials('Zoë Ünal')).toBe('ZÜ')
   expect(initials('')).toBe('?')
+  expect(initials('Sim (nightly)')).toBe('SN') // brackets and other marks aren't letters
+  expect(initials('(()')).toBe('?')
   const app = readFileSync(join(import.meta.dir, '..', 'web', 'app.js'), 'utf8')
   const fn = app.slice(app.indexOf('function projectIcon('), app.indexOf('const projectRow'))
   expect(fn).toContain('initials(p.name)')
@@ -167,4 +169,18 @@ test('projects without an icon show initials; only Bebop keeps the mark; session
   // Topic rows on a project's page: the state dot at the end, in line with the sessions'.
   const item = app.slice(app.indexOf('function topicItem('), app.indexOf('// Always a way to talk'))
   expect(item.indexOf('topicDotEl(t)')).toBeGreaterThan(item.indexOf('home-topic-main'))
+})
+
+test('order: sessions and projects by state, then latest activity; a project page on the phone can start a conversation', () => {
+  const app = readFileSync(join(import.meta.dir, '..', 'web', 'app.js'), 'utf8')
+  expect(app).toMatch(/const byPaneDot = [^\n]*\(b\.changed \?\? 0\) - \(a\.changed \?\? 0\)/)
+  expect(app).toMatch(/const sortedPanes = [^\n]*\(b\.changed \?\? 0\) - \(a\.changed \?\? 0\)/)
+  const list = app.slice(app.indexOf('function projectList('), app.indexOf('function blockedSessions('))
+  expect(list).toContain('DOT_RANK[a.dot] - DOT_RANK[b.dot] || b.latest - a.latest')
+  const home = app.slice(app.indexOf('function homeNodes('), app.indexOf('function renderHome('))
+  expect(home).toContain("view.kind === 'project' ? newConversationRow(view.key, pick)")
+  expect(home).not.toContain("column && view.kind === 'project' ? newConversationRow")
+  // A sheet's scrolling list runs to its bottom edge, with the home-indicator room inside it.
+  const css = readFileSync(join(import.meta.dir, '..', 'web', 'style.css'), 'utf8')
+  expect(css).toContain('.sheet > .sheet-body:last-child { padding-bottom: calc(14px + var(--safe-bottom)); }')
 })

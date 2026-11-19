@@ -5,7 +5,11 @@ import { basename } from 'path'
 import type { ShellBackend, ShellProbe, Shareable } from './shells'
 
 export type PaneStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
-export type Pane = { id: string; title: string; agent: string; status: PaneStatus; cwd: string | null; project: string | null; focused: boolean }
+export type Pane = {
+  id: string; title: string; agent: string; status: PaneStatus; cwd: string | null; project: string | null; focused: boolean
+  /** When the hub last saw its status or title change (ms), or first saw it. The app orders sessions by it. */
+  changed?: number
+}
 
 export interface PaneProvider {
   list(): Promise<Pane[]>
@@ -172,12 +176,20 @@ export function rexStatus(status: any, process: any): PaneStatus {
   return STATUSES.has(s) ? s : 'unknown'
 }
 
-/** The agent running in the foreground, from the block's `process` result; null for a shell. */
-export function rexAgent(process: any): string | null {
+/**
+ * The agent running in the foreground, from the block's `process` result; null for a shell.
+ * A launcher script (a companion's `bin/<name>`: zsh running claude as its child) is the
+ * foreground program, so Claude Code's own status report counts too: a record from the
+ * foreground program whose app is claude-code.
+ */
+export function rexAgent(process: any, status?: any): string | null {
   const f = process?.foreground
   if (!f) return null
   const names = [f.argv0, f.invoked_path && basename(String(f.invoked_path))].filter(Boolean).map(String)
-  return names.includes('claude') ? 'claude' : null
+  if (names.includes('claude')) return 'claude'
+  const recs = Array.isArray(status?.records) ? status.records : []
+  const own = recs.filter((r: any) => r && !r.id && (r.owner == null || r.owner.pid === f.pid))
+  return own.some((r: any) => r.app === 'claude-code' || r.effective_app === 'claude-code') ? 'claude' : null
 }
 
 /** Rex's `--format vt` moves the cursor right (`ESC [ n C`) in place of runs of spaces. */
@@ -203,7 +215,7 @@ export function rexProvider(o: { bin: string; timeoutMs?: number; run?: Runner; 
   const timeout = o.timeoutMs ?? 5000
 
   async function call(args: string[], expectJson = true): Promise<any> {
-    const r = await run([o.bin, ...args], {}, timeout)
+    const r = await run([o.bin, '--autostart=false', ...args], {}, timeout)  // never let a poll restart Rex (it kills every session in it)
     if (r.code !== 0) {
       const msg = (r.stderr || r.stdout).trim().replace(/^Error:\s*/, '')
       const code = /not.?found|no such|unknown block/i.test(msg) ? 'agent_not_found' : 'failed'
@@ -223,13 +235,19 @@ export function rexProvider(o: { bin: string; timeoutMs?: number; run?: Runner; 
     if (block?.creator_name !== 'com.superlogical.terminal' || typeof block.block_id !== 'string') return null
     const b = ['block', 'call', '-b', block.block_id]
     const proc = await call([...b, 'process'])
-    const agent = rexAgent(proc)
+    let status: any = null
+    let agent = rexAgent(proc)
+    if (!agent && proc?.foreground) { // a launcher script around claude? its status report says
+      status = await call([...b, 'program_status']).catch(() => null)
+      agent = rexAgent(proc, status)
+    }
     if (!agent) {
       // A plain shell shows only if the hub opened it; every other one stays hidden.
       const id = rexPaneId(session.session_id, block.block_id)
       return o.shells?.().has(id) ? rexShellPane(id, session, proc) : null
     }
-    const [status, title] = await Promise.all([call([...b, 'program_status']), call([...b, 'title']).catch(() => null)])
+    const title = await call([...b, 'title']).catch(() => null)
+    status ??= await call([...b, 'program_status'])
     const cwd = typeof proc?.foreground?.cwd === 'string' && proc.foreground.cwd ? proc.foreground.cwd : null
     const t = String(title?.title ?? '').replace(TITLE_GLYPH, '').trim()
     return {
@@ -288,7 +306,7 @@ export function rexShellBackend(o: { bin: string; timeoutMs?: number; run?: Runn
   const run = o.run ?? spawnRunner
   const timeout = o.timeoutMs ?? 10000
   async function call(args: string[]): Promise<string> {
-    const r = await run([o.bin, ...args], {}, timeout)
+    const r = await run([o.bin, '--autostart=false', ...args], {}, timeout)  // never let a poll restart Rex (it kills every session in it)
     if (r.code !== 0) throw new PaneError(/not.?found|no such|unknown block/i.test(r.stderr) ? 'agent_not_found' : 'failed', (r.stderr || r.stdout).trim().replace(/^Error:\s*/, '').split('\n')[0].slice(0, 300) || `exit ${r.code}`)
     return r.stdout
   }
@@ -470,9 +488,13 @@ export function createPaneWatcher(o: {
   /** Takes a fresh list (from a poll or a request) and works out what changed. */
   function observe(next: Pane[]) {
     const prev = new Map(panes.map(p => [p.id, p]))
+    updated = now()
+    next = next.map(p => {
+      const old = prev.get(p.id)
+      return { ...p, changed: old && old.status === p.status && old.title === p.title ? old.changed : updated }
+    })
     const changed = JSON.stringify(next) !== JSON.stringify(panes)
     panes = next
-    updated = now()
     if (baseline) {
       for (const p of next) {
         if (p.status !== 'blocked' || prev.get(p.id)?.status === 'blocked') continue

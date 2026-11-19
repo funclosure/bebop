@@ -50,10 +50,14 @@
           </button>
         </div>
       </div>
-      <nav class="threads" id="threads" aria-label="Threads"></nav>
-      <div class="context" id="context" hidden></div>
+      <!-- Inside a topic: one row naming it, with its session (phone: under the bar, with ‹ and ⋯; wide: in the bar's left side, with its tools and Archive). Wide, in All: the topic of the message at the top. -->
+      <div class="topic-bar" id="topic-bar" hidden></div>
+      <!-- Phone, All: the topic of the message at the top of the list, floating over it. -->
+      <div class="topic-bar topic-pin" id="topic-pin" hidden></div>
     </header>
     <!-- Shown when the agent hasn't listened for a while (no watcher or channel connected). -->
+    <div class="hub-down" id="hub-down" role="alert" hidden></div>
+    <div class="hub-down agent-ask" id="agent-ask" role="status" hidden></div>
     <div class="agent-off" id="agent-off" role="status" hidden></div>
 
     <main class="list" id="list" aria-live="polite">
@@ -90,6 +94,7 @@
     </div>
 
 
+    <div class="drop-zone" id="drop-zone" hidden><span id="drop-zone-label"></span></div>
     <footer class="composer" id="composer">
       <ul class="suggest" id="suggest" role="listbox" hidden></ul>
       <div class="reply-strip" id="reply-strip" hidden>
@@ -345,6 +350,19 @@
         </div>
       </div>
       <ul class="sheet-body peer-list" id="archived-list"></ul>
+    </div>
+  </div>
+
+  <div class="sheet-backdrop" id="scheduled-sheet" hidden>
+    <div class="sheet tall" role="dialog" aria-modal="true" aria-labelledby="scheduled-title" tabindex="-1">
+      <div class="sheet-grabber" aria-hidden="true"></div>
+      <div class="sheet-head">
+        <div>
+          <h2 id="scheduled-title">Scheduled</h2>
+          <div class="sheet-sub" id="scheduled-sub"></div>
+        </div>
+      </div>
+      <ul class="sheet-body peer-list" id="scheduled-list"></ul>
     </div>
   </div>
 

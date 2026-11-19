@@ -81,7 +81,10 @@ const list = $('list'), messagesEl = $('messages'), input = $('input')
 
 // ---------- api ----------
 async function api(path, opts = {}) {
-  const res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', ...(opts.headers ?? {}) } })
+  let res
+  try { res = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', ...(opts.headers ?? {}) } }) }
+  catch (e) { if (e?.name !== 'AbortError') setReach(navigator.onLine === false ? 'offline' : 'network'); throw e }
+  setReach(res.status >= 502 && res.status <= 504 ? 'hub' : null) // a proxy's answer: the hub itself is down
   if (!res.ok) {
     const e = new Error(`HTTP ${res.status}`); e.status = res.status
     e.body = await res.clone().json().catch(() => null)
@@ -90,6 +93,45 @@ async function api(path, opts = {}) {
   }
   return res.json()
 }
+
+// ---------- reaching the hub ----------
+// Off the tailnet (Tailscale off) every request fails before it reaches the hub, and the app
+// used to show an empty list. Now a band says so, with Retry; messages on screen stay. When the
+// hub answers again (Retry, the stream reopening, a resume), what's missing loads.
+const reach = { down: null } // null, or why: 'network' (Tailscale off?), 'offline' (no connection), 'hub' (not answering)
+function setReach(why) {
+  if (reach.down === why) return
+  const was = reach.down
+  reach.down = why
+  renderReach()
+  if (was && !why) recoverHub()
+}
+function renderReach() {
+  const b = $('hub-down')
+  if (!b) return
+  b.hidden = !reach.down
+  if (reach.down) b.replaceChildren(
+    h('span', { class: 'hub-down-text' }, h('strong', {}, S.hubDown), ' ', S.hubDownWhy[reach.down]),
+    h('button', { type: 'button', class: 'pill-btn small', onclick: retryHub }, S.retry))
+  if (!$('empty').hidden) paintEmpty()
+}
+async function retryHub(e) {
+  const btn = e?.currentTarget
+  if (btn) { btn.disabled = true; btn.textContent = S.retrying }
+  try { await api('api/auth/status') } catch {}
+  if (reach.down) { if (btn?.isConnected) { btn.disabled = false; btn.textContent = S.retry }; toast(S.stillDown) }
+}
+// Back from unreachable: load what never came, then reopen the stream.
+function recoverHub() {
+  if (!state.historyLoaded) loadLatest().catch(() => {})
+  else catchUp()
+  loadThreads(); loadLists(); loadPresence()
+  if (!state.configLoaded) loadConfig()
+  if (es?.readyState !== EventSource.OPEN) connect()
+  flushOutbox()
+}
+addEventListener('online', () => { if (reach.down) retryHub() })
+addEventListener('offline', () => setReach('offline'))
 const qs = o => new URLSearchParams(Object.entries(o).filter(([, v]) => v != null && v !== '')).toString()
 
 // ---------- formatting ----------
@@ -132,9 +174,15 @@ function renderFiles(m) {
     out.push(grid)
   }
   // #t= makes iOS draw the first frame instead of a black box; the chip below saves or shares it.
-  // The box starts at 16:9 (style.css) so a late poster doesn't push the list around; only a
-  // video of another shape changes it, once, when its size is known.
-  for (const f of videos) out.push(h('video', { src: `${fileUrl(f.id)}#t=0.1`, controls: true, preload: 'metadata', playsinline: true, onloadedmetadata: videoShape }), downloadChip(f, '🎬'))
+  // The box has the video's shape from the start when the hub knows it (f.w, f.h), so nothing
+  // moves when it loads. Otherwise it starts at 16:9 (style.css) and a video of another shape
+  // changes it, once, when its size is known (the list keeps the reader's place meanwhile).
+  for (const f of videos) {
+    const known = f.w > 0 && f.h > 0
+    const v = h('video', { src: `${fileUrl(f.id)}#t=0.1`, controls: true, preload: 'metadata', playsinline: true, onloadedmetadata: known ? null : videoShape })
+    if (known) v.style.aspectRatio = `${f.w} / ${f.h}`
+    out.push(v, downloadChip(f, '🎬'))
+  }
   for (const f of audios) out.push(audioPlayer(fileUrl(f.id), 0, { title: f.name, id: m.id }), downloadChip(f, '🎧'))
   for (const f of others) {
     out.push(isText(f)
@@ -370,9 +418,33 @@ function qState(m) {
 }
 const qValid = a => (a.sel.length > 0 && !(a.otherOn && !a.other.trim())) || (a.otherOn && !!a.other.trim())
 
+// A card nobody has to answer any more: the agent closed it (with a reason, and the card that
+// replaces it) or the user dismissed it. Greyed out, no buttons.
+const isCard = m => m.sender === 'agent' && (m.kind === 'question' || m.kind === 'approval')
+const openCard = m => isCard(m) && m.body.answered == null && !m.body.resolved
+function closedNote(m) {
+  const r = m.body.resolved
+  if (r.by === 'user') return h('div', { class: 'closed-note' }, S.dismissed)
+  return h('div', { class: 'closed-note' }, h('strong', {}, S.noLongerNeeded), r.reason ? ` · ${r.reason}` : '',
+    r.superseded_by ? h('button', { type: 'button', class: 'link-btn', onclick: e => { e.stopPropagation(); jumpTo(r.superseded_by) } }, S.seeNewer) : null)
+}
+function dismissCard(m) {
+  if (!openCard(m)) return
+  m.body.resolved = { by: 'user', at: Date.now() }
+  state.qstate.delete(m.id)
+  replaceNode(m); updateWaiting()
+  enqueue({ kind: 'answer', to: m.id, dismiss: true })
+  toast(S.dismissedToast)
+}
+
 function renderQuestion(m) {
   const qs = m.body.questions
   const card = h('div', { class: 'card question' })
+  if (m.body.resolved && m.body.answered == null) {
+    card.classList.add('closed')
+    card.append(h('ul', { class: 'answers' }, qs.map(q => h('li', {}, h('span', { class: 'k' }, q.header ?? q.prompt)))), closedNote(m))
+    return card
+  }
   if (m.body.answered) {
     card.append(h('ul', { class: 'answers' }, qs.map(q => h('li', {}, h('span', { class: 'k' }, `${q.header ?? q.prompt}: `), fmtAnswer(m.body.answered[q.id])))),
       h('div', { class: 'answered-note' }, `✓ ${S.answered}`))
@@ -459,6 +531,11 @@ function renderApproval(m) {
     card.append(h('div', { class: 'outcome' }, h('strong', {}, b.answered), b.answered_note ? ` · ${b.answered_note}` : ''))
     return card
   }
+  if (b.resolved) {
+    card.classList.add('closed')
+    card.append(closedNote(m))
+    return card
+  }
   const st = state.qstate.get(m.id) ?? {}
   card.append(h('div', { class: 'pills-row' }, b.options.map((label, i) => h('button', {
     type: 'button', class: `pill-btn${i === 0 ? ' primary-pill' : ''}`, disabled: !!st.sending,
@@ -477,10 +554,84 @@ function renderApproval(m) {
   return card
 }
 
+// Notes to the agent that aren't the user's or the agent's own: quiet, full width, no menu.
+const agentName = () => $('app').dataset.name || document.title
+// A project's name as the sidebar shows it (projectList: the first spelling seen on a peer, a session
+// or a topic), else its key made readable.
+function projectDisplayName(key) {
+  const k = projectKey(key), same = x => x && projectKey(x) === k
+  const raw = state.peers.find(p => same(p.project))?.project ?? panes.list.find(p => same(p.project))?.project ?? openTopics().find(t => same(t.project))?.project
+  return S.projectName(raw ?? k)
+}
+const threadTag = m => state.thread == null && m.thread ? h('button', { class: 'thread-tag', type: 'button', onclick: () => switchThread(m.thread) }, threadTitle(m.thread)) : null
+
+// The sender line: who an incoming message is from, with that project's icon. The agent's own words
+// carry no source. One it passed on from a session carries that session's name (source) and, when
+// the hub can tell, the session's project (from_project). A peer's note names its project itself.
+const projectIconFor = (key, name) => ({ name, icon: key === selfName() ? 'icons/icon-192.png' : state.peers.find(x => projectKey(x.project) === key)?.icon ?? state.projectIcons[key] ?? null })
+function senderOf(m) {
+  const agent = agentName(), self = selfName()
+  if (m.sender === 'peer') { const key = projectKey(m.source); return { key, name: S.peerNote(projectDisplayName(key), agent), title: S.peerNoteTitle, iconName: projectDisplayName(key) } }
+  if (m.sender !== 'agent') return null
+  const key = projectKey(m.from_project) || null
+  if (!m.source || key === self || projectKey(m.source) === self) return { key: self, name: agent, title: null, iconName: agent, self: true }
+  // A session named after its project ("notes-app-6e") shows as the project; one with a name of its own ("Rōnin") by that name.
+  const base = m.source.normalize('NFC').toLowerCase().replace(/-[0-9a-f]{2}$/, '')
+  const who = key && base === key ? projectDisplayName(key) : m.source
+  return { key, name: S.passedOn(who, agent), title: S.passedOnTitle(m.source, key ? projectDisplayName(key) : null, agent), iconName: key ? projectDisplayName(key) : m.source }
+}
+// The project the open view belongs to: a project conversation's, or its topic's. Null in the agent's own view.
+const viewProjectKey = () => state.thread == null ? null : projectKey(projectOfThread(state.thread) ?? curTopic()?.project) || null
+// In the agent's view every incoming message shows its icon. In a project's conversation or topic only
+// a sender from another project does: there the agent and that project's own sessions are expected.
+function senderLine(m) {
+  const s = senderOf(m)
+  if (!s) return null
+  const icon = state.thread == null || (!s.self && s.key !== viewProjectKey())
+  return h('span', { class: `sender${s.self ? ' self' : ''}`, title: s.title },
+    // The agent's own: the round mark the header shows, not the app's tile (a light square on a dark page).
+    icon ? s.self ? h('img', { class: 'sender-icon self-mark', src: 'icons/mark.svg', alt: '' }) : projectIcon(projectIconFor(s.key, s.iconName), 'sender-icon') : null,
+    h('span', { class: 'sender-name' }, s.name))
+}
+const ICON_CLOCK = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M12 7.5V12l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
+// A project session's note for the agent, folded to its first line (peers write that line to stand alone).
+function buildPeerNote(m) {
+  const text = m.body.text ?? ''
+  const lines = text.split('\n').filter(l => l.trim())
+  const first = plainPreview(lines[0] ?? '') || S.attachment
+  const head = h('span', { class: 'note-head' },
+    h('span', { class: 'note-who' }, senderLine(m)),
+    m.body.session ? h('span', { class: 'note-session' }, m.body.session) : null,
+    threadTag(m),
+    h('span', { class: 'note-time' }, timeFmt.format(m.ts)))
+  const el = h('div', { class: 'msg note peer-note', id: `m${m.id}`, 'data-id': m.id })
+  if (lines.length <= 1 && !m.files?.length) {
+    el.append(h('div', { class: 'note-card', title: S.peerNoteTitle }, head, h('span', { class: 'note-first' }, first)))
+    return el
+  }
+  el.append(h('details', { class: 'note-card' },
+    h('summary', { title: S.peerNoteTitle }, head, h('span', { class: 'note-first' }, first), h('span', { class: 'note-more' }, S.showNote)),
+    h('div', { class: 'note-body' }, renderFiles(m), text.trim() ? renderMarkdownBlock(text, false) : null)))
+  return el
+}
+// One of the agent's timers came due.
+function buildTimerLine(m) {
+  const b = m.body
+  return h('div', { class: 'msg note timer-note', id: `m${m.id}`, 'data-id': m.id },
+    h('div', { class: 'note-line' },
+      h('span', { class: 'note-icon', html: ICON_CLOCK }),
+      h('span', { class: 'note-text' }, S.timerFired(agentName(), plainPreview(b.text ?? ''))),
+      b.late ? h('span', { class: 'note-late', title: S.timerLateTitle }, S.timerLate) : null,
+      threadTag(m),
+      h('span', { class: 'note-time' }, timeFmt.format(m.ts))))
+}
+
 function buildNode(m) {
+  if (m.sender === 'peer') return buildPeerNote(m)
+  if (m.sender === 'clock') return buildTimerLine(m)
   const el = h('div', { class: `msg ${m.sender}${m.kind !== 'text' ? ' wide' : ''}`, id: `m${m.id}`, 'data-id': m.id })
   const metaBits = []
-  if (m.sender === 'agent' && m.source) metaBits.push(h('span', {}, S.via(m.source)))
+  if (m.sender === 'agent') metaBits.push(senderLine(m))
   if (state.thread == null && m.thread) metaBits.push(h('button', { class: 'thread-tag', type: 'button', onclick: () => switchThread(m.thread) }, threadTitle(m.thread)))
   metaBits.push(h('span', {}, timeFmt.format(m.ts)))
   if (m.edited_at && m.kind === 'text') metaBits.push(h('span', {}, S.edited))
@@ -531,6 +682,7 @@ function renderAll() {
   $('empty').hidden = sorted.length > 0 || pendingForView().length > 0
   paintEmpty()
   updateWaiting()
+  requestAnimationFrame(() => { topicPin.id = undefined; updatePin() }) // after the list has its place
 }
 
 // Older messages are prepended, not re-rendered: WebKit has no scroll anchoring,
@@ -597,7 +749,7 @@ function upsert(m) {
   state.msgs.set(m.id, m)
   if (had) {
     const st = state.qstate.get(m.id)
-    if (st && (m.body.answered != null)) state.qstate.delete(m.id)
+    if (st && (m.body.answered != null || m.body.resolved)) state.qstate.delete(m.id)
     replaceNode(m)
     updateWaiting()
   } else if (m.id > state.oldest || !state.hasMore) {
@@ -638,22 +790,51 @@ async function jumpTo(id, { smooth = true } = {}) {
 }
 
 function updateWaiting() {
-  const waiting = [...state.msgs.values()].filter(m => inView(m) && m.sender === 'agent' && (m.kind === 'question' || m.kind === 'approval') && m.body.answered == null).sort((a, b) => a.id - b.id)
+  const waiting = [...state.msgs.values()].filter(m => inView(m) && openCard(m)).sort((a, b) => a.id - b.id)
   const p = $('waiting-pill')
   p.hidden = waiting.length === 0
   p.textContent = S.waiting(waiting.length)
   p.onclick = () => waiting[0] && jumpTo(waiting[0].id)
 }
 
-// Stay pinned to the bottom while late content (images, video posters) grows the list.
+// Stay pinned to the bottom while late content (images, video posters) grows the list. Away from
+// the bottom, keep the reader's place instead: WebKit has no scroll anchoring (it's off in every
+// engine, .list), so a video above the reader taking its shape, or any late growth up there, would
+// push what they're reading down. `place` is the first node showing at the top of the list and how
+// far its top is below the list's, noted on every scroll; when it has moved, the list follows by
+// the same amount before the next paint.
 let pinned = true
+const place = { node: null, y: 0 }
+function notePlace() {
+  const kids = messagesEl.children, top = list.getBoundingClientRect().top
+  let lo = 0, hi = kids.length - 1, hit = null
+  while (lo <= hi) { // the first node whose bottom is below the list's top
+    const mid = (lo + hi) >> 1
+    if (kids[mid].getBoundingClientRect().bottom > top) { hit = kids[mid]; hi = mid - 1 } else lo = mid + 1
+  }
+  place.node = hit
+  place.y = hit ? hit.getBoundingClientRect().top - top : 0
+}
+function keepPlace() {
+  const n = place.node
+  if (!n?.isConnected) return // the list was redrawn: whatever drew it chose the place
+  const d = n.getBoundingClientRect().top - list.getBoundingClientRect().top - place.y
+  if (Math.abs(d) >= 1) list.scrollTop += d
+}
 // Observing the list too keeps the last message in view when the keyboard shrinks it.
-const pin = new ResizeObserver(() => { if (pinned) list.scrollTop = list.scrollHeight })
+const pin = new ResizeObserver(() => { if (pinned) list.scrollTop = list.scrollHeight; else keepPlace() })
 pin.observe(messagesEl)
 pin.observe(list)
 pin.observe($('typing'))
+let lastTop = 0
 list.addEventListener('scroll', () => {
-  pinned = state.atLatest && atBottom()
+  const top = list.scrollTop
+  // Scrolled up by the reader (not moved to the end by a list that got shorter): let go of the
+  // bottom at once, so a late video near it doesn't pull them back down while they scroll.
+  const up = top < lastTop - 1 && top < list.scrollHeight - list.clientHeight - 1
+  lastTop = top
+  pinned = state.atLatest && atBottom() && !up
+  notePlace()
   if (list.scrollTop < 1200) loadOlder() // early, so the prepend lands well above what the reader sees
   if (!state.atLatest) { if (list.scrollHeight - list.scrollTop - list.clientHeight < 1200) loadNewer(); return }
   if (atBottom()) { if (state.newCount) { state.newCount = 0; updateNewPill() } markRead() }
@@ -672,6 +853,7 @@ async function loadLatest() {
   state.newest = Math.max(top, ...live.map(m => m.id))
   state.hasMore = page.length === 50
   state.atLatest = true
+  state.historyLoaded = true
   state.newCount = 0
   updateNewPill()
   renderAll()
@@ -808,6 +990,7 @@ function setThreads(t) {
   for (const x of state.threads) if (x.title === x.id && projectOfThread(x.id)) x.title = S.projectChat
   state.generalUnread = t.general_unread
   state.projectIcons = t.projects ?? state.projectIcons
+  state.projectLinks = t.project_links ?? state.projectLinks ?? {}
   renderThreads()
   retryBlank()
   // The selected topic was archived, here or from elsewhere: on to the next, or the session.
@@ -815,6 +998,9 @@ function setThreads(t) {
 }
 const isArchived = t => t?.state === 'archived'
 const openTopics = () => state.threads.filter(t => !isArchived(t))
+// A closed topic (its task done) keeps its project, which its header shows, but sits under Other
+// with the topics that have none, not under the project.
+const filedProject = t => t?.closed ? null : t?.project ?? null
 const ICON_BOARD = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="12" rx="1.8" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m7.5 13 3-3.2 2.4 2.2 3.6-3.8M9 20l3-3.5 3 3.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
 const ICON_ARCHIVE = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="3.5" y="5" width="17" height="4.5" rx="1.2" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M5.5 9.5V18a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5V9.5M10 13.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>'
 // Threads with no open task sit under Other, collapsed by default.
@@ -831,6 +1017,7 @@ function paintEmpty() {
   const known = t && (t.detail || t.history?.length)
   el.classList.toggle('task', !!known)
   const key = projectOfThread(state.thread)
+  if (!known && reach.down && !state.historyLoaded) return el.textContent = S.hubDownEmpty
   if (!known) return el.textContent = key ? S.startPeer(sessionPeer(key) ?? $('app').dataset.name) : S.empty
   el.replaceChildren(
     h('h2', {}, t.title),
@@ -870,7 +1057,7 @@ const selfName = () => $('app').dataset.name?.toLowerCase()
 // A project's sessions: its live panes, or the peers published for it when it has none.
 function sessionsOf(key) {
   const live = panes.list.filter(p => projectKey(p.project) === key)
-    .map(p => ({ pane: p.id, state: p.status, detail: p.title }))
+    .map(p => ({ pane: p.id, state: p.status, detail: p.title, changed: p.changed ?? 0 }))
   if (live.length) return live
   return state.peers.filter(p => projectKey(p.project) === key)
     .map(p => ({ pane: null, state: p.state, detail: p.detail || p.name }))
@@ -886,7 +1073,7 @@ function projectList() {
   }
   for (const p of state.peers) add(p.project, p.icon)
   for (const p of panes.list) add(p.project)
-  for (const t of openTopics()) if (t.project) { add(t.project); seen.get(projectKey(t.project))?.topics.push(t) }
+  for (const t of openTopics()) if (filedProject(t)) { add(t.project); seen.get(projectKey(t.project))?.topics.push(t) }
   for (const p of seen.values()) {
     p.sessions = sessionsOf(p.key)
     p.topics.sort(byDot)
@@ -895,8 +1082,10 @@ function projectList() {
     p.live = p.dot === 'green' && p.topics.some(t => topicState(t).live)
     p.offline = p.sessions.length > 0 && p.sessions.every(x => isOffline(x.state))
     p.unread = p.topics.some(t => t.unread > 0)
+    p.latest = Math.max(0, ...p.topics.map(t => Math.max(t.updated ?? 0, t.last ?? 0)), ...p.sessions.map(x => x.changed ?? 0))
   }
-  return [...seen.values()].sort((a, b) => DOT_RANK[a.dot] - DOT_RANK[b.dot] || a.name.localeCompare(b.name))
+  // Most urgent first, then the most recent activity (a message, or a session changing state).
+  return [...seen.values()].sort((a, b) => DOT_RANK[a.dot] - DOT_RANK[b.dot] || b.latest - a.latest || a.name.localeCompare(b.name))
 }
 function blockedSessions() {
   return panes.list.filter(p => stateClass(p.status) === 'red')
@@ -937,7 +1126,7 @@ const plainRow = (t, pick) => h('div', { class: 'topic-row' },
   topicHover(t))
 // Below the projects: topics with no project, then threads with no task, then the archive.
 function looseRows(pick) {
-  const loose = openTopics().filter(t => !t.project)
+  const loose = openTopics().filter(t => !filedProject(t))
   const tasks = loose.filter(t => t.lane).sort(byDot), rest = loose.filter(t => !t.lane).sort(byDot)
   const parts = []
   if (tasks.length) parts.push(h('div', { class: 'lane-group' }, h('div', { class: 'lane' }, S.noProject), ...tasks.map(t => plainRow(t, pick))))
@@ -951,6 +1140,7 @@ function looseRows(pick) {
   }
   const cur = state.threads.find(t => t.id === state.thread)
   if (isArchived(cur)) parts.push(plainRow(cur, pick))
+  if (state.timers?.length) parts.push(h('button', { type: 'button', class: 'lane plain', onclick: openScheduled }, S.scheduledN(state.timers.length)))
   const archived = state.threads.filter(isArchived)
   if (archived.length) parts.push(h('button', { type: 'button', class: 'lane plain', onclick: openArchived }, S.archivedN(archived.length)))
   return parts
@@ -994,7 +1184,8 @@ function sessionsRow() {
     h('span', { class: 'proj-icon proj-slot', html: ICON_AGENT }), h('span', { class: 'proj-name' }, S.sessions), n ? h('span', { class: 'proj-n' }, String(n)) : null,
     dotEl(worstDot(panes.list.map(p => stateClass(p.status)))))
 }
-const byPaneDot = (a, b) => DOT_RANK[stateClass(a.status)] - DOT_RANK[stateClass(b.status)]
+// Sessions: by state, then the one that changed last (the hub stamps `changed`).
+const byPaneDot = (a, b) => DOT_RANK[stateClass(a.status)] - DOT_RANK[stateClass(b.status)] || (b.changed ?? 0) - (a.changed ?? 0)
 function sessionItem(p) {
   const cur = panes.open && panes.id === p.id
   return h('button', { type: 'button', class: `sess sess-row sess-item${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => selectSession(p.id) },
@@ -1022,10 +1213,13 @@ function renderSide() {
   el.scrollTop = top
 }
 // "My App: rethink layout" reads as "Rethink layout" under My App's own heading.
+// A topic's title under its project, without the project's name when the title starts with it and a
+// separator ("Bento: thumbnails" → "Thumbnails"). Only then: "Hub mobile: topic header" or
+// "Hub + Bebop: notes" keep their name, which is part of what they say.
 function shortTitle(title, p) {
   if (!p) return title
   const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const rest = title.replace(new RegExp(`^(${esc(p.name)}|${esc(p.key)})(: *| · | +)`, 'i'), '')
+  const rest = title.replace(new RegExp(`^(${esc(p.name)}|${esc(p.key)})(: +| · | - | — )`, 'i'), '')
   return rest ? rest[0].toUpperCase() + rest.slice(1) : title
 }
 function sessionCard(x, go, column) {
@@ -1046,7 +1240,8 @@ function sessionCard(x, go, column) {
 function topicItem(t, p, pick, column) {
   const cur = column && t.id === state.thread && !panes.open
   return h('div', { class: 'topic-row' },
-    h('button', { type: 'button', class: `home-topic${t.unread > 0 ? ' unread' : ''}${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => pick(t.id) },
+    // Beside the conversation the next step is cut to two lines: the whole of it on hover.
+    h('button', { type: 'button', class: `home-topic${t.unread > 0 ? ' unread' : ''}${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, title: column && t.detail ? t.detail : null, onclick: () => pick(t.id) },
       h('span', { class: 'home-topic-main' }, h('span', { class: 'home-topic-title' }, shortTitle(t.title, p)), t.detail ? h('span', { class: 'home-topic-next' }, t.detail) : null),
       topicDotEl(t)), // at the end, in line with the session rows' dots
     topicHover(t))
@@ -1060,7 +1255,7 @@ function newConversationRow(key, pick) {
   return h('button', { type: 'button', class: `home-new${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => pick(id) }, S.newConversation)
 }
 // A view's open topics in sort order. Archived ones are never here, so they can't be picked.
-const viewTopics = view => view.kind === 'sessions' ? [] : view.kind === 'needs' ? needsTopics() : openTopics().filter(t => projectKey(t.project) === view.key).sort(byDot)
+const viewTopics = view => view.kind === 'sessions' ? [] : view.kind === 'needs' ? needsTopics() : openTopics().filter(t => projectKey(filedProject(t)) === view.key).sort(byDot)
 // A project's column, or Needs you: the same contents beside the conversation and in the sheet.
 function homeNodes(view, pick, term, column = false) {
   if (view.kind === 'sessions') {
@@ -1071,13 +1266,16 @@ function homeNodes(view, pick, term, column = false) {
   const name = p?.name ?? (view.kind === 'needs' ? S.needsYou : S.projectName(view.key ?? ''))
   const sessions = view.kind === 'needs' ? blockedSessions() : p?.sessions ?? sessionsOf(view.key)
   const topics = view.kind === 'needs' ? needsTopics() : p?.topics ?? []
+  const head = h('div', { class: 'home-head' }, view.kind === 'needs' ? h('span', { class: 'home-icon proj-slot' }, dotEl('red')) : projectIcon(p ?? { name }, 'home-icon'), h('h2', {}, name),
+      view.kind === 'project' ? projectLinkButton(view.key) : null,
+      view.kind === 'project' ? projectToolButtons(view.key, name) : null)
+  if (view.kind === 'project') attachLinkEditor(head, view.key, name)
   return [
-    h('div', { class: 'home-head' }, view.kind === 'needs' ? h('span', { class: 'home-icon proj-slot' }, dotEl('red')) : projectIcon(p ?? { name }, 'home-icon'), h('h2', {}, name),
-      view.kind === 'project' ? projectToolButtons(view.key, name) : null),
+    head,
     ...sessions.map(x => sessionCard(x, term, column)),
     h('div', { class: 'home-topics' }, ...topics.map(t => topicItem(t, p, pick, column))),
-    column && view.kind === 'project' ? newConversationRow(view.key, pick) : null,
-    !column && !sessions.length && !topics.length ? h('p', { class: 'home-empty' }, view.kind === 'needs' ? S.needsEmpty : S.projectEmpty) : null,
+    view.kind === 'project' ? newConversationRow(view.key, pick) : null, // beside the conversation and on the phone
+    !column && view.kind === 'needs' && !sessions.length && !topics.length ? h('p', { class: 'home-empty' }, S.needsEmpty) : null,
   ].filter(Boolean)
 }
 function renderHome() {
@@ -1248,35 +1446,192 @@ function renderAddress() {
 function renderNav() {
   renderSide()
   renderHome()
+  renderTopicBar() // its icon and session button follow the peers and panes too
   if (topicsSheet.open) renderSheet()
 }
-// The chips are the short list for the phone: All, the full list, what's being read, what's
-// unread, then what needs the user. The sidebar replaces them on wide windows.
-function renderThreads() {
-  const nav = $('threads')
-  nav.textContent = ''
-  const allUnread = state.generalUnread + state.threads.reduce((s, t) => s + t.unread, 0)
-  const chip = (id, label, unread, extra = '') => h('button', { type: 'button', class: `chip${state.thread === id ? ' current' : ''}${extra}`, onclick: () => switchThread(id) }, label, unread ? h('span', { class: 'dot' }) : null)
-  nav.append(chip(null, S.all, allUnread > 0 && state.thread !== null))
-  // The full list is behind the name chip now (title-btn), so no Topics (N) chip here.
-  const wanted = t => t.id === state.thread || (!isArchived(t) && (t.unread > 0 || t.lane === 'you'))
-  const rank = t => t.id === state.thread ? 2 : t.unread > 0 ? 1 : 0
-  for (const t of state.threads.filter(wanted).sort((a, b) => rank(b) - rank(a) || b.updated - a.updated))
-    nav.append(chip(t.id, t.title, t.unread > 0 && state.thread !== t.id, isArchived(t) ? ' archived' : ''))
-  // Keep the current chip in view (horizontally only: scrollIntoView could move the shell on iOS).
-  const curChip = nav.querySelector('.chip.current')
-  if (curChip && (curChip.offsetLeft < nav.scrollLeft || curChip.offsetLeft + curChip.offsetWidth > nav.scrollLeft + nav.clientWidth)) nav.scrollLeft = curChip.offsetLeft - 16
-  const ctx = $('context')
-  const cur = state.threads.find(t => t.id === state.thread)
-  ctx.hidden = !cur
-  if (cur) {
-    const arch = isArchived(cur)
-    ctx.replaceChildren(...[
-      cur.project && !wide.matches ? h('button', { type: 'button', class: 'context-btn back', onclick: () => openHome({ kind: 'project', key: projectKey(cur.project) }) }, S.back(S.projectName(cur.project))) : null,
-      h('span', { class: 'context-text' }, [cur.project ? shortTitle(cur.title, { name: S.projectName(cur.project), key: projectKey(cur.project) }) : cur.title, cur.detail].filter(Boolean).join(' · ')),
-      ...toolButtons(cur),
-      h('button', { type: 'button', class: 'context-btn archive', onclick: () => setArchived(cur, !arch) }, arch ? S.unarchive : S.archive, h('span', { class: 'context-icon', 'aria-hidden': 'true', html: ICON_ARCHIVE }))].filter(Boolean))
+// ---------- the topic bar ----------
+// Inside a topic one row names it: its project's icon, the whole title, project · next step, and
+// the session behind it (one tap to its terminal). On the phone the row sits under the top bar,
+// after ‹ back to All, with ⋯ (Open app, tools, the project's page, Archive), and a tap on the
+// topic opens its project's page. On wide windows it takes the top bar's empty left side (the
+// sidebar is the way back), with the tools and Archive as buttons, and a click on the topic shows
+// or hides its project's column. In All the same row names the topic of the message at the top of
+// the list as it scrolls (a tap opens that topic): floating under the top bar on the phone, in
+// the top bar on wide windows.
+const ICON_LIST = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M8 7h11M8 12h11M8 17h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><circle cx="4.5" cy="7" r="1.1" fill="currentColor"/><circle cx="4.5" cy="12" r="1.1" fill="currentColor"/><circle cx="4.5" cy="17" r="1.1" fill="currentColor"/></svg>'
+const ICON_CHEVRON_DOWN = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m7 10 5 5 5-5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+const ICON_CHEVRON_RIGHT = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="m10 7 5 5-5 5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+// A topic's project key and name: its own, a project conversation's, or none (the agent's).
+function topicProjectOf(id) {
+  const t = state.threads.find(x => x.id === id)
+  const key = projectKey(projectOfThread(id) ?? t?.project) || null
+  return key ? { key, name: projectDisplayName(key) } : null
+}
+const topicProject = () => topicProjectOf(state.thread)
+// The sessions behind a topic: its project's panes, or the agent's own for a topic with none.
+const topicPanes = key => panes.on ? panes.list.filter(p => projectKey(p.project) === (key ?? selfName())) : []
+// One topic's row: the topic (a tap does `go`; nothing when there's no `go`), its session, then
+// `tail` (⋯ unless given).
+function topicRow(id, go, chevron, tail) {
+  const t = state.threads.find(x => x.id === id), p = topicProjectOf(id)
+  const title = t ? t.title : threadTitle(id) // whole: a shortened one can read wrong ("Hub + Bebop" → "+ Bebop")
+  const sub = [p?.name, t?.detail].filter(Boolean).join(' · ')
+  const icon = p ? projectIcon(projectIconFor(p.key, p.name), 'tb-icon') : h('img', { class: 'tb-icon self-mark', src: 'icons/mark.svg', alt: '' })
+  // A wide window shows a cut title and next step whole on hover.
+  const tip = wide.matches ? [title, t?.detail].filter(Boolean).join('\n\n') : null
+  const main = h(go ? 'button' : 'div', { type: go ? 'button' : null, class: `tb-main${go ? '' : ' static'}`, onclick: go, title: tip },
+    icon,
+    h('span', { class: 'tb-text' }, h('span', { class: 'tb-title' }, title), sub ? h('span', { class: 'tb-sub' }, sub) : null),
+    chevron ? h('span', { class: 'tb-more-chev', html: chevron }) : null)
+  const mine = topicPanes(p?.key)
+  const session = mine.length ? h('button', { type: 'button', class: 'tb-session', 'aria-label': S.openSessions(mine.length), title: wide.matches ? S.openSessions(mine.length) : null,
+    onclick: () => mine.length === 1 ? openPanes(mine[0].id) : showProject(p?.key ?? selfName()) },
+    h('span', { class: 'tb-session-icon', html: ICON_TERMINAL }),
+    mine.length > 1 ? h('span', { class: 'tb-session-n' }, String(mine.length)) : null,
+    dotEl(worstDot(mine.map(x => stateClass(x.status))))) : null
+  const more = tail ? null : h('button', { type: 'button', class: 'tb-menu', 'aria-label': S.more, 'aria-haspopup': 'dialog', onclick: () => openTopicMenu(t, p) }, '⋯')
+  return [main, session, more, ...(tail ?? [])].filter(Boolean)
+}
+// Wide windows, inside a topic: its tools and Archive as buttons beside its session.
+function topicActions(cur) {
+  if (!cur) return []
+  const arch = isArchived(cur)
+  return [
+    ...tools.list.map(t => {
+      const on = panel.tool === t.id && panel.thread === cur.id
+      return h('button', { type: 'button', class: `tb-act${on ? ' on' : ''}`, 'aria-pressed': String(on), title: t.name, 'aria-label': t.name, onclick: () => toggleTool(t.id, cur.id) }, toolIconEl(t))
+    }),
+    h('button', { type: 'button', class: 'tb-act', title: arch ? S.unarchive : S.archive, onclick: () => setArchived(cur, !arch) },
+      h('span', { class: 'tb-act-icon', 'aria-hidden': 'true', html: ICON_ARCHIVE }), h('span', { class: 'tb-act-label' }, arch ? S.unarchive : S.archive)),
+  ]
+}
+// A project's sessions and topics: the sheet on the phone; on wide windows its column beside the
+// conversation, keeping the topic that's open (openHome would pick the project's own).
+function showProject(key) {
+  if (!wide.matches) return openTopicsSheet({ kind: 'project', key })
+  setHome({ kind: 'project', key })
+  $('home').scrollTop = 0
+  setBlank(false)
+  if (panes.open) closePanes()
+  if (inHome(state.thread)) rememberTopic(state.home, state.thread)
+  renderThreads()
+}
+const columnShown = key => state.home?.kind === 'project' && state.home.key === key
+function toggleProjectColumn(key) { if (columnShown(key)) closeHome(); else showProject(key) }
+// All, wide: the agent's name when the message at the top has no topic.
+const allRow = () => [h('div', { class: 'tb-main static' }, h('img', { class: 'tb-icon self-mark', src: 'icons/mark.svg', alt: '' }),
+  h('span', { class: 'tb-text' }, h('span', { class: 'tb-title' }, $('app').dataset.name), h('span', { class: 'tb-sub' }, S.allMessages)))]
+// All: the topic of the message at the top of the list, pinned while it scrolls. Hidden over
+// messages with no topic (the agent's main conversation) on the phone. `dir`: the way the list
+// last moved (1: scrolled down, the messages going up; -1: scrolled up).
+const topicPin = { id: undefined, frame: 0, nodes: null, top: 0, dir: 1 }
+new MutationObserver(() => { topicPin.nodes = null }).observe(messagesEl, { childList: true })
+// A topic row's contents, in a .tb-row inside `host`. The same topic repainted (its session or
+// next step changed): in place, no motion. Another topic: the old row leaves by one edge while the
+// new one comes in by the other, clipped by the host: one push, both rows moving together, so their
+// text never overlaps. dir 1: up (the new from the bottom edge), -1: down (from the top edge),
+// 0: no motion. Reduced motion: a short fade, no movement.
+const ROW_MOVE = { duration: 280, easing: 'cubic-bezier(.25,.8,.25,1)' }
+function swapRow(host, key, nodes, dir) {
+  for (const n of [...host.children]) if (!n.classList.contains('tb-row') || n.classList.contains('leaving')) n.remove() // a ‹ from the phone, a row still leaving
+  const cur = host.querySelector(':scope > .tb-row')
+  if (cur && host.dataset.topic === key) return cur.replaceChildren(...nodes)
+  host.dataset.topic = key
+  const row = h('div', { class: 'tb-row' }, ...nodes)
+  if (!cur) return host.append(row)
+  if (!dir || !host.getClientRects().length) return cur.replaceWith(row) // hidden: nothing to see move
+  // The old row leaves from where it is, out of the flow, measured before the new one takes its place.
+  const r = cur.getBoundingClientRect(), hr = host.getBoundingClientRect()
+  Object.assign(cur.style, { position: 'absolute', left: `${r.left - hr.left}px`, top: `${r.top - hr.top}px`, width: `${r.width}px`, height: `${r.height}px` })
+  cur.classList.add('leaving')
+  cur.inert = true
+  host.append(row)
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches
+  const y = pct => still ? 'none' : `translateY(${pct}%)`
+  const timing = still ? { duration: 120 } : ROW_MOVE
+  cur.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: y(-100 * dir) }], { ...timing, fill: 'forwards' }) // gone until removed
+    .finished.then(() => cur.remove(), () => cur.remove())
+  row.animate([{ opacity: 0, transform: y(100 * dir) }, { opacity: 1, transform: 'none' }], timing)
+}
+function renderTopicBar() {
+  const bar = $('topic-bar'), on = state.thread != null, inBar = wide.matches && !state.home
+  bar.hidden = !on && !inBar
+  bar.classList.toggle('pinned', !on)
+  $('app').classList.toggle('in-topic', on)
+  topicPin.id = undefined // repaint the pinned row too
+  if (on && wide.matches) {
+    const p = topicProject()
+    const row = topicRow(state.thread, p ? () => toggleProjectColumn(p.key) : null, null, topicActions(curTopic()))
+    if (p) row[0].setAttribute('aria-expanded', String(columnShown(p.key)))
+    swapRow(bar, state.thread, row, 1) // another topic opened: it comes up from the bottom edge
+  } else if (on) {
+    const p = topicProject()
+    const back = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, onclick: () => switchThread(null) }, h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
+    const main = topicRow(state.thread, () => openTopicsSheet(p ? { kind: 'project', key: p.key } : null), ICON_CHEVRON_DOWN)
+    main[0].setAttribute('aria-haspopup', 'dialog')
+    bar.replaceChildren(back, h('div', { class: 'tb-row' }, ...main)) // opened from a sheet: no motion
+    bar.dataset.topic = state.thread
+  } else if (!inBar) { bar.replaceChildren(); delete bar.dataset.topic }
+  updatePin()
+}
+const PIN_PROBE = 64 // px below the top of the list: the line the row stands over
+function topThread() {
+  const nodes = topicPin.nodes ??= [...messagesEl.querySelectorAll(':scope > .msg')]
+  const y = list.getBoundingClientRect().top + PIN_PROBE
+  let lo = 0, hi = nodes.length - 1, hit = -1
+  while (lo <= hi) { // the first message whose bottom is below the probe line
+    const mid = (lo + hi) >> 1
+    if (nodes[mid].getBoundingClientRect().bottom > y) { hit = mid; hi = mid - 1 } else lo = mid + 1
   }
+  if (hit < 0) return null
+  return state.msgs.get(Number(nodes[hit].dataset.id))?.thread ?? null
+}
+function updatePin() {
+  const el = $('topic-pin'), all = state.thread == null && !state.home
+  const id = all ? topThread() : null
+  if (wide.matches) { // in the top bar, the agent's name when there's no topic
+    el.hidden = true
+    if (!all || id === topicPin.id) return
+    topicPin.id = id
+    swapRow($('topic-bar'), id ?? '', id ? topicRow(id, () => switchThread(id), ICON_CHEVRON_RIGHT, []) : allRow(), topicPin.dir)
+    return
+  }
+  if (id) el.style.top = `${list.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top}px` // under any banner, over the list
+  if (id === topicPin.id) return
+  topicPin.id = id
+  // Coming back after messages with no topic: it just appears (the row it had would slide out).
+  if (id) swapRow(el, id, topicRow(id, () => switchThread(id), ICON_CHEVRON_RIGHT), el.hidden ? 0 : topicPin.dir)
+  el.hidden = !id
+}
+list.addEventListener('scroll', () => {
+  if (topicPin.frame) return
+  topicPin.frame = requestAnimationFrame(() => {
+    topicPin.frame = 0
+    const top = list.scrollTop
+    if (top !== topicPin.top) topicPin.dir = top > topicPin.top ? 1 : -1
+    topicPin.top = top
+    updatePin()
+  })
+}, { passive: true })
+// ⋯ in the phone's topic bar: Open app, the project's page, the tools and Archive.
+function openTopicMenu(cur, p) {
+  const close = () => actionSheet.hide()
+  const link = p ? state.projectLinks?.[p.key] : null
+  const actions = []
+  if (link?.url && /^https?:\/\//.test(link.url)) actions.push(h('a', { class: 'sheet-link', href: link.url, target: '_blank', rel: 'noopener noreferrer', onclick: close }, `${link.label || S.openApp} ↗`))
+  if (p) actions.push(h('button', { type: 'button', onclick: () => { close(); openTopicsSheet({ kind: 'project', key: p.key }) } }, S.projectPage(p.name)))
+  if (cur) for (const t of tools.list) actions.push(h('button', { type: 'button', onclick: () => { close(); toggleTool(t.id, cur.id) } }, t.name))
+  if (cur) { const arch = isArchived(cur); actions.push(h('button', { type: 'button', onclick: () => { close(); setArchived(cur, !arch) } }, arch ? S.unarchive : S.archive)) }
+  $('sheet-emojis').replaceChildren()
+  $('sheet-emojis').hidden = true
+  $('sheet-actions').replaceChildren(...actions)
+  actionSheet.show()
+}
+
+// There is no chip row or context line any more: the topic bar names the topic (and in All the
+// topic of the message at the top), and the name button (the sidebar on wide windows) lists them.
+function renderThreads() {
+  const allUnread = state.generalUnread + state.threads.reduce((s, t) => s + t.unread, 0)
   syncTool()
   if (archivedSheet.open) renderArchived()
   renderNav()
@@ -1314,17 +1669,40 @@ function renderSheet() {
   const el = $('topics-list'), top = el.scrollTop
   $('topics-title').hidden = !!sheetView
   $('topics-back').hidden = !sheetView
-  if (sheetView) {
+  if (sheetView?.kind === 'all') {
+    el.replaceChildren(...allTopicsNodes(pickTopic))
+  } else if (sheetView) {
     el.replaceChildren(...homeNodes(sheetView, pickTopic, id => { topicsSheet.hide(); openPanes(id) }))
   } else {
-    const n = needsCount()
+    // The projects, as always; above them Needs you and All topics (every open topic in one list).
+    const n = needsCount(), all = openTopics().length
     const list = projectList()
     el.replaceChildren(
-      h('button', { type: 'button', class: 'needs-chip', onclick: () => showSheet({ kind: 'needs' }) }, dotEl(n ? 'red' : 'quiet'), `${S.needsYou}${n ? ` ${n}` : ''}`),
+      h('div', { class: 'sheet-chips' },
+        h('button', { type: 'button', class: 'needs-chip', onclick: () => showSheet({ kind: 'needs' }) }, dotEl(n ? 'red' : 'quiet'), `${S.needsYou}${n ? ` ${n}` : ''}`),
+        h('button', { type: 'button', class: 'needs-chip all-chip', onclick: () => showSheet({ kind: 'all' }) }, h('span', { class: 'all-chip-icon', html: ICON_LIST }), S.allTopics(all))),
       ...list.map(p => projectRow(p, () => showSheet({ kind: 'project', key: p.key }), false)),
       ...looseRows(pickTopic))
   }
   el.scrollTop = top
+}
+// All topics: every open topic, the most urgent first, each with its project's icon, its title
+// and one line of "project · next step"; the one being read is marked.
+function allTopicsNodes(pick) {
+  const list = [...openTopics()].sort(byDot)
+  return [
+    h('div', { class: 'home-head' }, h('h2', {}, S.allTopics(list.length))),
+    h('div', { class: 'home-topics all-topics' }, ...list.map(t => {
+      const p = topicProjectOf(t.id), cur = t.id === state.thread
+      const icon = p ? projectIcon(projectIconFor(p.key, p.name), 'all-icon') : h('span', { class: 'all-icon proj-slot' })
+      return h('div', { class: 'topic-row' },
+        h('button', { type: 'button', class: `home-topic all-topic${t.unread > 0 ? ' unread' : ''}${cur ? ' current' : ''}`, 'aria-current': cur ? 'true' : null, onclick: () => pick(t.id) },
+          icon,
+          h('span', { class: 'home-topic-main' }, h('span', { class: 'home-topic-title' }, t.title),
+            [p?.name, t.detail].some(Boolean) ? h('span', { class: 'home-topic-next one-line' }, [p?.name, t.detail].filter(Boolean).join(' · ')) : null),
+          topicDotEl(t)))
+    })),
+  ]
 }
 function showSheet(view) {
   sheetView = view
@@ -1558,6 +1936,7 @@ async function loadLists() {
   try { state.commands = (await api('api/commands')).commands } catch {}
   try { setPeers(await api('api/peers')) } catch {}
   try { setTasks(await api('api/tasks')) } catch {}
+  try { setTimers(await api('api/timers')) } catch {}
 }
 function setPeers(p) {
   state.peers = p.peers ?? []
@@ -1663,6 +2042,69 @@ function renderTasks() {
   }))
 }
 $('tasks-chip').onclick = openTasks
+
+// ---------- the clock: the agent's timers, which the user can move or cancel ----------
+state.timers = []
+function setTimers(t) {
+  state.timers = t.timers ?? []
+  if (scheduledSheet.open) renderScheduled()
+  renderThreads()
+}
+function openScheduled() { topicsSheet.hide(); renderScheduled(); scheduledSheet.show() }
+function renderScheduled() {
+  const agent = agentName()
+  $('scheduled-title').textContent = S.scheduled
+  $('scheduled-sub').textContent = S.scheduledSub(agent)
+  const ul = $('scheduled-list')
+  if (!state.timers.length) return ul.replaceChildren(h('li', { class: 'peer-empty' }, S.noScheduled(agent)))
+  ul.replaceChildren(...state.timers.map(t => h('li', { class: 'timer-row' },
+    h('span', { class: 'peer-main' },
+      h('span', { class: 'peer-name' }, t.text),
+      h('span', { class: 'peer-meta' }, [S.dueAt(t.due), t.repeat ? S.repeatLabel(t.repeat) : null, t.thread ? threadTitle(t.thread) : null].filter(Boolean).join(' · '))),
+    h('span', { class: 'timer-actions' },
+      h('button', { type: 'button', class: 'pill-btn small', onclick: () => moveTimer(t) }, S.moveTimer),
+      cancelTimerButton(t)))))
+}
+const timerApi = (t, path, body = {}) => api(`api/timers/${t.id}${path}`, { method: 'POST', headers: { 'x-hub-action': '1' }, body: JSON.stringify(body) })
+// Cancel asks once more on the button itself: a timer can't be brought back from here.
+function cancelTimerButton(t) {
+  let armed = 0
+  const btn = h('button', { type: 'button', class: 'pill-btn small' }, S.cancelTimer)
+  btn.onclick = async () => {
+    if (!armed) {
+      btn.textContent = S.confirmCancelTimer; btn.classList.add('danger')
+      armed = setTimeout(() => { armed = 0; btn.textContent = S.cancelTimer; btn.classList.remove('danger') }, 4000)
+      return
+    }
+    clearTimeout(armed); btn.disabled = true
+    try { await timerApi(t, '/cancel'); toast(S.timerCancelled(agentName())) }
+    catch { btn.disabled = false; toast(S.timerFailed) }
+  }
+  return btn
+}
+// <input type="datetime-local"> reads and writes the browser's local time: sent as ms, so it's right wherever the hub is.
+const localInput = ms => { const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16) }
+function moveTimer(t) {
+  const at = h('input', { type: 'datetime-local', class: 'link-input', value: localInput(t.due), min: localInput(Date.now()) })
+  const note = h('p', { class: 'link-note' }, S.moveHow(agentName()))
+  const dlg = h('dialog', { class: 'link-dialog' })
+  const done = () => { dlg.close(); dlg.remove() }
+  dlg.append(h('form', { method: 'dialog', onsubmit: async e => {
+      e.preventDefault()
+      const ms = new Date(at.value).getTime()
+      if (!Number.isFinite(ms)) return
+      if (ms < Date.now()) { note.textContent = S.timerPast; note.classList.add('error'); return }
+      try { await timerApi(t, '', { at: ms }); done(); toast(S.timerMoved(agentName())) }
+      catch { note.textContent = S.timerFailed; note.classList.add('error') }
+    } },
+    h('h3', {}, S.moveTitle(t.text)), at, note,
+    h('div', { class: 'link-actions' },
+      h('span', { class: 'grow' }),
+      h('button', { type: 'button', class: 'pill-btn small', onclick: done }, S.cancel),
+      h('button', { type: 'submit', class: 'pill-btn small primary-pill' }, S.save))))
+  dlg.addEventListener('cancel', () => dlg.remove())
+  document.body.append(dlg); dlg.showModal(); at.focus()
+}
 $('compose-form').addEventListener('submit', e => { e.preventDefault(); send() })
 
 function send() {
@@ -1706,11 +2148,46 @@ input.addEventListener('paste', e => {
   const files = [...(e.clipboardData?.files ?? [])]
   if (!files.length) return
   if (!e.clipboardData.types.includes('text/plain')) e.preventDefault()
+  attachFiles(files)
+})
+function attachFiles(files) {
   for (const f of files) {
     const ext = (f.type.split('/')[1] ?? 'bin').replace('jpeg', 'jpg')
     const file = !f.name || /^image\.\w+$/.test(f.name) ? new File([f], `pasted-${Date.now()}.${ext}`, { type: f.type }) : f
     startUpload({ key: crypto.randomUUID(), file, status: 'uploading', progress: 0 })
   }
+}
+// Dragging files from Finder or the desktop onto the conversation attaches them like +
+// (photos, videos, PDFs, anything). A drop anywhere else never opens the file in place of
+// the app. Folders are skipped: the hub takes files.
+const dropZone = $('drop-zone')
+$('drop-zone-label').textContent = S.dropToAttach
+const composerShown = () => $('composer').getClientRects().length > 0
+const draggingFiles = e => [...(e.dataTransfer?.types ?? [])].includes('Files')
+let dropHide = 0
+const hideDrop = () => { clearTimeout(dropHide); dropZone.hidden = true }
+document.addEventListener('dragover', e => {
+  if (!draggingFiles(e)) return
+  e.preventDefault()
+  const ok = composerShown()
+  e.dataTransfer.dropEffect = ok ? 'copy' : 'none'
+  dropZone.hidden = !ok
+  clearTimeout(dropHide); dropHide = setTimeout(hideDrop, 250) // dragover repeats while over the window
+})
+document.addEventListener('dragleave', e => { if (!e.relatedTarget) hideDrop() })
+document.addEventListener('drop', e => {
+  if (!draggingFiles(e)) return
+  e.preventDefault(); hideDrop()
+  if (!composerShown()) return
+  const items = [...(e.dataTransfer.items ?? [])]
+  const folders = items.filter(i => i.kind === 'file' && i.webkitGetAsEntry?.()?.isDirectory).length
+  const files = items.length
+    ? items.filter(i => i.kind === 'file' && !i.webkitGetAsEntry?.()?.isDirectory).map(i => i.getAsFile()).filter(Boolean)
+    : [...e.dataTransfer.files]
+  if (folders) toast(S.noFolders)
+  if (!files.length) return
+  attachFiles(files)
+  input.focus()
 })
 function startUpload(a) {
   if (!state.atts.includes(a)) state.atts.push(a)
@@ -1956,25 +2433,44 @@ addEventListener('keydown', e => { if (rec.active && e.key === 'Escape') { e.sto
 refreshSend()
 
 // ---------- gestures: long-press / swipe-right on a bubble ----------
+// An open question or approval card can also swipe left, as in Mail: it slides over to show a red
+// Dismiss button, and a tap on that closes the card (two steps, so it isn't done by accident).
+const REVEAL = 92
+let revealed = null // the card wrap showing its Dismiss button
+function closeReveal() { if (!revealed) return; revealed.style.transform = ''; revealed.classList.remove('revealed'); revealed = null }
+document.addEventListener('pointerdown', e => { if (revealed && !revealed.contains(e.target)) closeReveal() }, true)
 function attachGestures(wrap, m) {
-  let timer, sx, sy, dx = 0, active = false, fired = false, horiz = false
+  let timer, sx, sy, dx = 0, base = 0, active = false, fired = false, horiz = false
+  const swipeable = () => openCard(m)
+  if (isCard(m) && openCard(m)) wrap.append(h('button', { type: 'button', class: 'swipe-dismiss', tabindex: -1, 'aria-hidden': 'true',
+    onclick: e => { e.stopPropagation(); closeReveal(); dismissCard(m) } }, S.dismiss))
   wrap.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
-    if (e.target.closest('button, a, input, video, details, .option, .player, .transcript')) return
+    if (e.target.closest('.swipe-dismiss')) { fired = false; return }
+    // On a card, a swipe may start on an option; a long-press never does.
+    const onControl = !!e.target.closest('button, .option')
+    if (e.target.closest('a, input, textarea, video, details, .player, .transcript') || (onControl && !swipeable())) return
     active = true; fired = false; horiz = false; sx = e.clientX; sy = e.clientY; dx = 0
-    if (e.pointerType !== 'mouse') timer = setTimeout(() => { fired = true; active = false; navigator.vibrate?.(10); getSelection()?.removeAllRanges(); openSheet(m) }, 450)
+    base = revealed === wrap ? -REVEAL : 0
+    if (e.pointerType !== 'mouse' && !onControl) timer = setTimeout(() => { fired = true; active = false; navigator.vibrate?.(10); getSelection()?.removeAllRanges(); openSheet(m) }, 450)
   })
   wrap.addEventListener('pointermove', e => {
     if (!active) return
     const mx = e.clientX - sx, my = e.clientY - sy
     if (Math.abs(mx) > 8 || Math.abs(my) > 8) clearTimeout(timer)
-    if (!horiz && Math.abs(mx) > 12 && Math.abs(mx) > Math.abs(my) * 1.5 && e.pointerType !== 'mouse') horiz = true
-    if (horiz) { dx = Math.max(0, Math.min(mx, 72)); wrap.style.transform = `translateX(${dx}px)` }
+    if (!horiz && Math.abs(mx) > 12 && Math.abs(mx) > Math.abs(my) * 1.5 && e.pointerType !== 'mouse') { horiz = true; fired = true; wrap.style.transition = 'none' }
+    if (horiz) { dx = Math.max(swipeable() ? -REVEAL - 16 : 0, Math.min(base + mx, 72)); wrap.style.transform = `translateX(${dx}px)` }
   })
   const end = () => {
     clearTimeout(timer)
+    if (!active) return // a press that started on Dismiss, or a long-press that opened the sheet
+    wrap.style.transition = ''
     if (horiz && dx > 56) { setReply(m); input.focus() }
-    wrap.style.transform = ''
+    if (horiz && swipeable() && dx < -REVEAL / 2) {
+      if (revealed && revealed !== wrap) closeReveal()
+      revealed = wrap; wrap.classList.add('revealed'); wrap.style.transform = `translateX(${-REVEAL}px)`; navigator.vibrate?.(10)
+    } else if (horiz || revealed !== wrap) { if (revealed === wrap) closeReveal(); else wrap.style.transform = '' }
+    else if (revealed === wrap) { closeReveal(); fired = true } // a tap on a revealed card puts it back
     active = false; horiz = false
   }
   wrap.addEventListener('pointerup', end)
@@ -1985,6 +2481,7 @@ function attachGestures(wrap, m) {
 
 // ---------- action sheet ----------
 function openSheet(m) {
+  $('sheet-emojis').hidden = false
   const mine = m.reactions?.find(r => r.sender === 'user')?.emoji
   const close = () => actionSheet.hide()
   $('sheet-emojis').replaceChildren(...EMOJIS.map(em => h('button', { type: 'button', class: em === mine ? 'mine' : '', onclick: () => {
@@ -1999,6 +2496,7 @@ function openSheet(m) {
   if (text) actions.push(h('button', { type: 'button', onclick: async () => { close(); try { await navigator.clipboard.writeText(text); toast(S.copied) } catch {} } }, S.copy))
   const files = (m.files ?? []).filter(f => m.kind !== 'voice' || !f.mime.startsWith('audio/'))
   if (files.length) actions.push(h('button', { type: 'button', onclick: () => { close(); saveFiles(files) } }, S.save))
+  if (openCard(m)) actions.push(h('button', { type: 'button', class: 'danger', onclick: () => { close(); dismissCard(m) } }, S.dismiss))
   $('sheet-actions').replaceChildren(...actions)
   actionSheet.show()
 }
@@ -2095,7 +2593,7 @@ function renderSearch() {
   status.textContent = search.results.length ? '' : search.q ? S.noResults(search.q) : S.noneOfType(S.searchTypes[search.type])
   if (search.type === 'photo' || search.type === 'video') return ul.replaceChildren(searchGrid(search.type))
   ul.replaceChildren(...search.results.map(m => {
-    const who = m.sender === 'user' ? S.you : (m.source ? S.via(m.source) : document.title)
+    const who = m.sender === 'user' ? S.you : m.sender === 'clock' ? S.timerWho : senderOf(m)?.name ?? document.title
     const text = m.snippet || plain(m) || S.attachment
     return h('li', {}, h('button', { type: 'button', class: 'result', onclick: () => openResult(m) },
       h('span', { class: 'result-meta' },
@@ -2175,6 +2673,19 @@ function setPanes(p) {
   renderNav()
   renderAddress()
   retryBlank()
+  renderAgentAsk()
+}
+// The agent's own session (the companion's pane) stopped on a prompt, a permission or a question:
+// its conversation says so, and Open shows the prompt as a card (Allow / Deny…) like any session's.
+const ownPane = () => panes.list.find(p => p.agent === 'claude' && projectKey(p.project) === selfName())
+function renderAgentAsk() {
+  const b = $('agent-ask'), p = ownPane()
+  const show = !!p && p.status === 'blocked' && !(panes.open && panes.id === p.id)
+  b.hidden = !show
+  if (!show) return
+  b.replaceChildren(
+    h('span', { class: 'hub-down-text' }, h('strong', {}, S.agentAsks($('app').dataset.name)), ' ', S.agentAsksHow),
+    h('button', { type: 'button', class: 'pill-btn small', onclick: () => openPanes(p.id) }, S.openSession))
 }
 async function loadPanes() {
   try { setPanes(await api('api/panes')); $('panes-status').textContent = '' }
@@ -2210,6 +2721,7 @@ function closePanes() {
   $('panes').hidden = true
   $('app').classList.remove('pane-on')
   $('panes-btn').classList.remove('active'); $('panes-btn').setAttribute('aria-pressed', 'false')
+  renderAgentAsk()
   applyPendingUpdate()
 }
 function showPaneList() {
@@ -2222,7 +2734,7 @@ function showPaneList() {
   $('panes-list-body').hidden = false
   renderPaneList()
 }
-const sortedPanes = () => [...panes.list].sort((a, b) => (PANE_ORDER[a.status] ?? 2) - (PANE_ORDER[b.status] ?? 2))
+const sortedPanes = () => [...panes.list].sort((a, b) => (PANE_ORDER[a.status] ?? 2) - (PANE_ORDER[b.status] ?? 2) || (b.changed ?? 0) - (a.changed ?? 0))
 const paneIcon = p => {
   const key = projectKey(p.project)
   return { name: S.projectName(p.project ?? p.agent ?? '?'), icon: key === selfName() ? 'icons/icon-192.png' : state.peers.find(x => projectKey(x.project) === key)?.icon ?? state.projectIcons[key] ?? null }
@@ -3033,6 +3545,7 @@ const shareSheet = makeSheet($('share-sheet'))
 const tasksSheet = makeSheet($('tasks-sheet'))
 const settingsSheet = makeSheet($('settings-sheet'))
 const archivedSheet = makeSheet($('archived-sheet'))
+const scheduledSheet = makeSheet($('scheduled-sheet'))
 const topicsSheet = makeSheet($('topics-sheet'))
 const docSheet = makeSheet($('doc-sheet'))
 const scopeSheet = makeSheet($('scope-sheet'))
@@ -3279,12 +3792,12 @@ function setConn(cls, title) {
 function connect() {
   es?.close()
   es = new EventSource('api/events')
-  es.onopen = () => { clearTimeout(lostTimer); lostTimer = 0; setConn('on', S.connected) }
+  es.onopen = () => { clearTimeout(lostTimer); lostTimer = 0; setConn('on', S.connected); setReach(null) }
   es.onerror = () => {
     $('conn').classList.remove('on'); $('conn').title = S.reconnecting
     // iOS drops the stream on every resume: only a gap that lasts counts as an error. Retries
     // fail again every few seconds, so the first failure starts the clock and the rest don't.
-    lostTimer ||= setTimeout(() => setConn('lost', S.reconnecting), 8000)
+    lostTimer ||= setTimeout(() => { setConn('lost', S.reconnecting); api('api/auth/status').catch(() => {}) }, 8000) // the request says why
     // A refused stream (401 once the lock times out) closes for good: ask why, which shows the lock.
     if (es.readyState === EventSource.CLOSED) probeSession()
   }
@@ -3322,6 +3835,7 @@ function connect() {
   es.addEventListener('listening', e => setListening(JSON.parse(e.data)))
   es.addEventListener('icon', e => iconChanged(JSON.parse(e.data).seed))
   es.addEventListener('tasks', e => setTasks(JSON.parse(e.data)))
+  es.addEventListener('timers', e => setTimers(JSON.parse(e.data)))
   es.addEventListener('panes', e => setPanes(JSON.parse(e.data)))
 }
 
@@ -3662,7 +4176,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v106'
+const APP_VERSION = 'v123'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
@@ -3863,6 +4377,7 @@ async function openTarget(thread, id) {
 async function loadConfig(pane) {
   try {
     const c = await api('api/config')
+    state.configLoaded = true
     state.login = c.login
     dictation.on = !!c.dictation; dictation.refine = !!c.refine
     $('rec-refine').hidden = !dictation.on
@@ -3905,12 +4420,49 @@ const toolById = id => tools.list.find(t => t.id === id)
 const httpUrlOn = (s, origin) => { try { const u = new URL(s); return u.origin === origin ? u.href : null } catch { return null } }
 
 const toolIconEl = t => t.icon ? h('img', { class: 'context-icon', src: t.icon, alt: '' }) : h('span', { class: 'context-icon', 'aria-hidden': 'true', html: t.id === 'board' ? ICON_BOARD : ICON_TOOL })
-// One context-bar button per tool.
-function toolButtons(cur) {
-  return tools.list.map(t => {
-    const on = panel.tool === t.id && panel.thread === cur.id
-    return h('button', { type: 'button', class: `context-btn tool-btn${on ? ' on' : ''}`, 'aria-pressed': String(on), onclick: () => toggleTool(t.id, cur.id) }, t.name, toolIconEl(t))
+// A project's "Open app" link (set by the agent): opens in the browser, never inside the app.
+function projectLinkButton(key) {
+  const l = state.projectLinks?.[key]
+  if (!l?.url || !/^https?:\/\//.test(l.url)) return null
+  return h('a', { class: 'pill-btn small project-link', href: l.url, target: '_blank', rel: 'noopener noreferrer', title: l.url },
+    l.label || S.openApp, ' ↗')
+}
+// Right-click (Mac) or long-press (iPhone) a project's header: "App link…" to set, change or remove it.
+function attachLinkEditor(head, key, name) {
+  let timer = null
+  head.addEventListener('contextmenu', e => { if (e.target.closest('a, button')) return; e.preventDefault(); editProjectLink(key, name) })
+  head.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' || e.target.closest('a, button')) return
+    const sx = e.clientX, sy = e.clientY
+    const cancel = () => { clearTimeout(timer); head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', cancel); head.removeEventListener('pointercancel', cancel) }
+    const move = ev => { if (Math.abs(ev.clientX - sx) > 8 || Math.abs(ev.clientY - sy) > 8) cancel() }
+    head.addEventListener('pointermove', move); head.addEventListener('pointerup', cancel); head.addEventListener('pointercancel', cancel)
+    timer = setTimeout(() => { cancel(); navigator.vibrate?.(10); getSelection()?.removeAllRanges(); editProjectLink(key, name) }, 500)
   })
+}
+function editProjectLink(key, name) {
+  const cur = state.projectLinks?.[key]
+  const url = h('input', { type: 'url', class: 'link-input', placeholder: 'https://', value: cur?.url ?? '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' })
+  const note = h('p', { class: 'link-note' }, S.appLinkHow)
+  const dlg = h('dialog', { class: 'link-dialog' })
+  const done = () => { dlg.close(); dlg.remove() }
+  const save = async value => {
+    try {
+      const r = await api(`api/projects/${encodeURIComponent(key)}/link`, { method: 'POST', headers: { 'x-hub-action': '1' }, body: JSON.stringify({ url: value, label: cur?.label ?? null }) })
+      state.projectLinks = { ...state.projectLinks }
+      if (r.link) state.projectLinks[key] = r.link; else delete state.projectLinks[key]
+      done(); renderThreads(); toast(r.link ? S.appLinkSaved : S.appLinkRemoved)
+    } catch (e) { note.textContent = e.status === 400 ? S.appLinkBad : S.appLinkFailed; note.classList.add('error') }
+  }
+  dlg.append(h('form', { method: 'dialog', onsubmit: e => { e.preventDefault(); const v = url.value.trim(); save(v || null) } },
+    h('h3', {}, S.appLinkTitle(name)), url, note,
+    h('div', { class: 'link-actions' },
+      cur ? h('button', { type: 'button', class: 'pill-btn small danger', onclick: () => save(null) }, S.remove) : null,
+      h('span', { class: 'grow' }),
+      h('button', { type: 'button', class: 'pill-btn small', onclick: done }, S.cancel),
+      h('button', { type: 'submit', class: 'pill-btn small primary-pill' }, S.save))))
+  dlg.addEventListener('cancel', () => dlg.remove())
+  document.body.append(dlg); dlg.showModal(); url.focus()
 }
 // A project's header: one button per project tool, opening its overview page.
 function projectToolButtons(key, name) {
