@@ -253,6 +253,12 @@ On the phone (below 900 px wide) the top bar (the agent's name button, search, s
 - `POST /api/projects/:key/link` (needs `X-Hub-Action: 1`): the same, from the app.
 - PWA: a project's header (sidebar page, phone project screen) shows a `<label> ↗` pill when the project has a link; it opens in the browser (`target=_blank`, `noopener noreferrer`), never inside the app. Right-click (mouse) or long-press (touch, 500 ms) on the header opens "App link for <name>": a URL field with Save, Cancel and, when set, Remove (an empty field removes too); a refused URL says so in place.
 
+## Claude usage
+
+- `GET /api/usage` → `{windows: {five_hour?, seven_day?}}`, each `{used (0–100), resets_at, updated}` (epoch seconds). Read from `usageDir` (`HUB_USAGE_DIR`; default `<claudeDir>/rate-limits`; `off`: always empty): `*.json` files of `{at, rate_limits: {five_hour?, seven_day?: {used_percentage, resets_at}}}`, one per session, written by the optional status line step (README, "Claude usage"). Skipped: files over 64 KB, not changed for 8 days, past the newest 500, or not readable as that shape. Read again at most every 15 s; never written to or deleted, and nothing else is called.
+- Per window: only reports whose reset is still ahead, and of those the latest reset (resets within 10 minutes of it are the same window). An idle session keeps an older, lower number, so `used` is the highest among them, and `updated` the newest `at` among the files with that number (when it was last written, not when Claude measured it). No folder or no current window: `{windows: {}}`.
+- PWA: one meter per window, the 5-hour one first: "Claude this week" or "Claude, 5-hour window" with the percent, a thin bar with a mark for how much of the window has gone (a bar that ends left of it is under pace), "Resets Sun 1:00 PM" ("Resets in 5 h" in the last day) and, when the report is older than 15 minutes, "as of 3 h ago". 75% and up amber, 90% red. The tooltip says where the number comes from. Wide windows: the foot of the sidebar, above Settings. Phone: the top of Sessions and the foot of the Topics sheet (it stays under the list). Fetched at start, every minute while the app is in view, and on coming back after 30 s. Nothing shows without a current window.
+
 ## v0.11: tools (bebop-tool v1)
 
 Replaces v0.10's boards: Board becomes the first tool.

@@ -1162,3 +1162,26 @@ body.col-dragging iframe { pointer-events: none; }
 }
 /* A narrow conversation (a project's column and a tool beside it): Archive is its icon. */
 @container (max-width: 620px) { .tb-act-label { display: none; } .tb-act { padding: 0 8px; } }
+
+/* Claude usage: a label and percent, a thin bar with a mark for how much of the window has gone, the reset. */
+.usage { display: flex; flex-direction: column; gap: 5px; }
+.usage + .usage { margin-top: 12px; }
+.usage-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
+.usage-pct { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+.usage-bar { position: relative; height: 6px; border-radius: 3px; background: var(--surface-2); }
+.usage-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--accent); }
+.usage-bar b { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--faint); }
+.usage-sub { font-size: 12px; color: var(--faint); }
+.usage.warn .usage-bar i { background: var(--warn); }
+.usage.alert .usage-bar i { background: var(--alert); }
+.usage.warn .usage-pct { color: var(--warn); }
+.usage.alert .usage-pct { color: var(--alert); }
+.side-usage { flex: none; margin: 0 8px 4px; padding: 10px 10px 8px; border-top: 1px solid var(--line); }
+.panes-usage { margin: 4px 16px 14px; padding: 12px 14px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.topics-usage { flex: none; margin: 0 -14px; padding: 12px 18px 0; border-top: 1px solid var(--line); }
+/* Hidden, the foot doesn't count: the list still runs to the sheet's bottom edge. */
+.sheet:has(> .sheet-body + .sheet-foot[hidden]:last-child) { padding-bottom: 0; }
+.sheet > .sheet-body:has(+ .sheet-foot[hidden]:last-child) { padding-bottom: calc(14px + var(--safe-bottom)); }
+.side-usage[hidden], .panes-usage[hidden], .topics-usage[hidden] { display: none; }
+/* Wide windows have it in the sidebar. */
+@media (min-width: 900px) { .panes-usage { display: none; } }

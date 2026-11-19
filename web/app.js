@@ -1193,6 +1193,45 @@ function sessionItem(p) {
     h('div', { class: 'sess-main' }, h('div', {}, p.title), h('small', {}, [p.project, S.paneStatus(p.status)].filter(Boolean).join(' · '))),
     dotEl(stateClass(p.status), p.status))
 }
+// Claude usage: the subscription's windows from /api/usage (hub/usage.ts), at the foot of the
+// sidebar on wide windows, and on the phone at the top of Sessions and the foot of the Topics
+// sheet. Nothing shows when the hub has none (the status line step is optional setup).
+const usage = { data: null, at: 0 }
+const USAGE_SPAN = { five_hour: 5 * 36e5, seven_day: 7 * 864e5 }
+const USAGE_STALE = 15 * 6e4 // reported longer ago than this: the meter says when
+function usageReset(at, now) {
+  const d = new Date(at * 1000), ms = d - now
+  return ms < 864e5 ? S.usageResetsIn(ms) : S.usageResets(d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))
+}
+const usageLevel = pct => pct >= 90 ? ' alert' : pct >= 75 ? ' warn' : ''
+function usageMeter(key, w, now) {
+  const pct = Math.round(Math.max(0, Math.min(100, w.used)))
+  // How much of the window has gone: a bar that ends left of the mark is under pace.
+  const gone = Math.max(0, Math.min(100, 100 - (w.resets_at * 1000 - now) / USAGE_SPAN[key] * 100))
+  const ago = Math.max(0, now - w.updated * 1000)
+  return h('div', { class: `usage${usageLevel(pct)}`, role: 'meter', 'aria-label': S.usageWindow[key], 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': pct, title: S.usageNote(ago) },
+    h('div', { class: 'usage-top' }, h('span', { class: 'usage-label' }, S.usageWindow[key]), h('span', { class: 'usage-pct' }, `${pct}%`)),
+    h('div', { class: 'usage-bar', 'aria-hidden': 'true' }, h('i', { style: `width:${pct}%` }), h('b', { style: `left:${gone.toFixed(1)}%` })),
+    h('div', { class: 'usage-sub' }, [usageReset(w.resets_at, now), ago > USAGE_STALE ? S.usageAsOf(ago) : null].filter(Boolean).join(' · ')))
+}
+// The shorter window first; a window whose reset has passed is gone until a session reports again.
+const usageWindows = now => Object.keys(USAGE_SPAN).flatMap(k => { const w = usage.data?.windows?.[k]; return w && w.resets_at * 1000 > now ? [[k, w]] : [] })
+function renderUsage() {
+  const now = Date.now(), ws = usageWindows(now)
+  for (const id of ['side-usage', 'panes-usage', 'topics-usage']) {
+    const el = $(id)
+    el.hidden = !ws.length
+    el.replaceChildren(...ws.map(([k, w]) => usageMeter(k, w, now)))
+  }
+}
+async function loadUsage() {
+  usage.at = Date.now()
+  try { const r = await fetch('api/usage'); usage.data = r.ok ? await r.json() : null } catch {}
+  renderUsage()
+}
+loadUsage()
+setInterval(() => { if (!document.hidden) loadUsage() }, 60000)
+document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - usage.at > 30000) loadUsage() })
 const sameView = (a, b) => a?.kind === b?.kind && a?.key === b?.key
 const curTopic = () => state.threads.find(t => t.id === state.thread)
 function renderSide() {
@@ -4176,7 +4215,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v123'
+const APP_VERSION = 'v124'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every

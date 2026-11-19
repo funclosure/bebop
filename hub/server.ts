@@ -8,6 +8,7 @@ import { join, extname, basename, normalize, isAbsolute, relative, sep } from 'p
 import { randomBytes, timingSafeEqual, createHash } from 'crypto'
 import { openDb, INBOUND, type MessageRow, type FileRow, type Sender } from './db'
 import { videoSize, type Size } from './media'
+import { usageReader } from './usage'
 import { parseAt, parseRepeat, nextDue, localIso, type TimerRow } from './clock'
 import { markParams, markShapes, markSvg, hash } from '../web/mark.js'
 import { rasterize, encodePng } from './raster'
@@ -82,6 +83,9 @@ export type HubOptions = {
   shellAuth?: { lockOn(): boolean; steppedUp(req: Request): boolean }
   /** Claude Code's config folder, for a session's transcript (default $CLAUDE_CONFIG_DIR or ~/.claude). */
   claudeDir?: string
+  /** The folder the optional status line step writes the subscription's usage to (default
+   *  <claudeDir>/rate-limits; HUB_USAGE_DIR, 'off' turns it off). Missing = nothing shown. */
+  usageDir?: string
   /** Passkey lock timing and relying party (see lock.ts). */
   lock?: LockOptions
   /** Tests: replaces Web Push delivery. */
@@ -1825,6 +1829,7 @@ export function createHub(opts: HubOptions) {
   }
 
   const claudeDir = opts.claudeDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
+  const usage = usageReader(opts.usageDir === 'off' ? null : opts.usageDir ?? join(claudeDir, 'rate-limits'))
 
   function paneErr(e: unknown): Response {
     if (!(e instanceof PaneError)) return err(502, String((e as Error)?.message ?? e))
@@ -2198,6 +2203,7 @@ export function createHub(opts: HubOptions) {
         }
         if (method === 'GET' && path === '/api/companion/file') return companionFile(url.searchParams.get('name') ?? '')
         if (method === 'GET' && path === '/api/tasks') return json(tasks())
+        if (method === 'GET' && path === '/api/usage') return json(usage())
         if (method === 'GET' && path === '/api/timers') return json({ timers: timerList().map(timerOut) })
         const tmr = /^\/api\/timers\/(\d{1,12})(\/cancel)?$/.exec(path)
         if (method === 'POST' && tmr) {

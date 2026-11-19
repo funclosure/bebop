@@ -30,6 +30,7 @@ const hub = createHub({
   boardOrigin: env.HUB_BOARD_ORIGIN || undefined,
   agentId: env.HUB_AGENT_ID || undefined,
   userName: env.HUB_USER_NAME || undefined,
+  usageDir: env.HUB_USAGE_DIR || undefined,
 })
 console.log(`hub: listening on ${hub.url}`)
 
