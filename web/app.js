@@ -1361,13 +1361,10 @@ function setBlank(on) {
 }
 // The topic last read in each view, while it is still open there.
 const LAST_TOPIC_KEY = 'project-topic'
-const LAST_CHAT_KEY = 'project-chat', LAST_PANE_KEY = 'project-pane' // one each, for the header's terminal toggle
 const viewKey = view => view.kind === 'project' ? view.key : `*${view.kind}`
 const remember = (map, view, id) => store.set(map, { ...store.get(map, {}), [viewKey(view)]: id })
 function rememberTopic(view, id) {
   remember(LAST_TOPIC_KEY, view, id)
-  if (id.startsWith('pane:')) remember(LAST_PANE_KEY, view, id.slice(5))
-  else remember(LAST_CHAT_KEY, view, id)
 }
 function firstTopic(view) {
   const topics = viewTopics(view), last = store.get(LAST_TOPIC_KEY, {})[viewKey(view)]
@@ -1405,26 +1402,12 @@ function openHome(view) {
   renderThreads()
 }
 function closeHome() { setHome(null); setBlank(false); renderThreads() }
-// The header's terminal icon, wide layout: a toggle between a project's chat and its terminal.
-function toggleTerminal() {
-  const view = state.home
-  if (panes.open) {
-    const last = view && store.get(LAST_CHAT_KEY, {})[viewKey(view)]
-    const topics = view ? viewTopics(view) : []
-    const chat = (topics.find(t => t.id === last) ?? topics[0])?.id ?? (view?.kind === 'project' ? projectThread(view.key) : state.thread)
-    return switchThread(chat)
-  }
-  if (view?.kind === 'project') {
-    const mine = panes.list.filter(p => projectKey(p.project) === view.key), last = store.get(LAST_PANE_KEY, {})[viewKey(view)]
-    if (mine.length) return selectSession((mine.find(p => p.id === last) ?? mine[0]).id)
-  }
-  openHome({ kind: 'sessions' })
-}
 // Wide layout: the right side shows what's selected on the left, so a session is a selection,
-// in the view it belongs to: this one if it's listed here, else its project.
+// in the view it belongs to: this one if it's listed here, else its project, else Sessions (one
+// with no folder), so a column with ‹ and the way to the conversations is always beside it.
 function selectSession(id) {
   const p = panes.list.find(x => x.id === id)
-  const view = state.home && paneInView(state.home, id) ? state.home : p?.project ? { kind: 'project', key: projectKey(p.project) } : null
+  const view = state.home && paneInView(state.home, id) ? state.home : p?.project ? { kind: 'project', key: projectKey(p.project) } : { kind: 'sessions' }
   if (!sameView(view, state.home)) setHome(view)
   if (view) rememberTopic(view, `pane:${id}`)
   setBlank(false)
@@ -1545,7 +1528,9 @@ function topicRow(id, go, chevron, tail) {
   const mine = topicPanes(p?.key)
   const session = mine.length ? h('button', { type: 'button', class: 'tb-session', 'aria-label': S.openSessions(mine.length), title: wide.matches ? S.openSessions(mine.length) : null,
     onclick: () => mine.length === 1 ? openPanes(mine[0].id) : showProject(p?.key ?? selfName()) },
-    h('span', { class: 'tb-session-icon', html: ICON_TERMINAL }),
+    // On wide windows it's the only session button, so it has a session's mark (the sparkle; >_ when
+    // they're all plain terminals). The phone keeps >_: the sparkle up top opens all sessions there.
+    h('span', { class: 'tb-session-icon', html: wide.matches ? agentMark(mine.find(x => x.agent !== 'shell')?.agent ?? 'shell') : ICON_TERMINAL }),
     mine.length > 1 ? h('span', { class: 'tb-session-n' }, String(mine.length)) : null,
     dotEl(worstDot(mine.map(x => stateClass(x.status))))) : null
   const more = tail ? null : h('button', { type: 'button', class: 'tb-menu', 'aria-label': S.more, 'aria-haspopup': 'dialog', onclick: () => openTopicMenu(t, p) }, '⋯')
@@ -3482,7 +3467,7 @@ $('pane-keys-btn').onclick = () => {
   refreshPaneChrome()
   if (panes.dialog && panes.raw != null) renderPaneText(panes.raw, true) // the whole screen with the keys
 }
-$('panes-btn').onclick = () => { if (wide.matches) toggleTerminal(); else openPanes() }
+$('panes-btn').onclick = () => openPanes() // the phone's: wide windows have none (the topic's session button, the sidebar's Sessions)
 $('panes-close').onclick = closePanes
 $('pane-fleet').onclick = openPanePick
 // A sideways swipe on the header or the fleet strip steps to the next or previous session.
@@ -4246,7 +4231,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v129'
+const APP_VERSION = 'v132'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every

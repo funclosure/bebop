@@ -1046,7 +1046,9 @@ body.col-dragging iframe { pointer-events: none; }
   #app.pane-on .list, #app.pane-on .floating, #app.pane-on .composer { display: none; }
   #app.pane-on .panes-view { position: static; flex: 1; min-height: 0; padding-top: 0; }
   #panes-close, #pane-fleet { display: none; }
-  #panes-btn.active { color: var(--accent); background: var(--accent-soft); }
+  /* No sparkle up top: the session button beside the topic opens its session, the sidebar's
+     Sessions row lists them all (with the count and dot), and a session shows beside a column. */
+  #panes-btn { display: none; }
   #app.pane-on #search:not([hidden]) ~ #panes { visibility: hidden; }
   .home-blank { flex: 1; display: grid; place-items: center; color: var(--faint); font-size: 15px; }
   /* Drag the edge of either column; double-click resets. Sits over the 1px border. */

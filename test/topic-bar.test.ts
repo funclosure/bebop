@@ -181,3 +181,15 @@ test('a project with no icon: its initial centred in the header\'s tile; a new p
   expect(css.indexOf('.tb-icon.proj-initial {')).toBeGreaterThan(css.indexOf('.tb-icon { flex: none; display: block;'))
   expect(app).toContain('?.title ?? (projectOfThread(id) ? S.projectChat : id)')
 })
+
+test('wide windows: one session button, beside the topic, with a session\'s mark; the phone keeps both', async () => {
+  const app = await web('app.js'), css = await web('style.css')
+  // No sparkle up top on wide windows; on the phone it opens the sessions as before.
+  expect(css).toContain('  #panes-btn { display: none; }')
+  expect(app).toContain("$('panes-btn').onclick = () => openPanes()")
+  expect(app).not.toContain('toggleTerminal')
+  // The topic's button: the sparkle (>_ when its sessions are all plain terminals) on wide, >_ on the phone.
+  expect(body(app, 'function topicRow(')).toContain("html: wide.matches ? agentMark(mine.find(x => x.agent !== 'shell')?.agent ?? 'shell') : ICON_TERMINAL")
+  // A session always shows beside a column: its view's, its project's, or Sessions (no folder).
+  expect(body(app, 'function selectSession(')).toContain("p?.project ? { kind: 'project', key: projectKey(p.project) } : { kind: 'sessions' }")
+})
