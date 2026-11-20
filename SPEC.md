@@ -62,7 +62,7 @@ Phone-first, works on desktop. Light and dark. Calm, legible; no framework requi
 - `manifest.webmanifest` (name from `HUB_AGENT_NAME`, served dynamically or templated), icons (simple generated SVG/PNG), `sw.js` (push → showNotification; notificationclick → focus/open the thread). Cache the app shell only.
 - Layout: thread switcher (All + threads, unread dots) → message list → composer.
 - Messages: Markdown rendered and sanitized; long ones collapsible; the sender line on agent messages (see "Sender line"); timestamps; quoted reply preview when `reply_to`.
-- Images: originals, tap for a full-screen zoom/pan viewer; several images in one message as a grid. Video: inline `<video>` with Range. Other files: a download chip.
+- Images: originals, tap for a full-screen zoom/pan viewer; several images in one message as a grid. With a mouse only the main button drags the picture; a right-click (or a Control-click) opens the browser's menu and leaves the picture where it is, and a drag ends at the first move with the button up, so the picture never follows a mouse that isn't pressed. Video: inline `<video>` with Range. Other files: a download chip.
 - Question card: each question with its options as tappable rows (recommended marked), option images side by side when present, multi-select where `multi`, an "Other" text field, one Submit for all. After answering, show the chosen answers and disable the card.
 - Approval card: buttons; after a tap show the outcome.
 - Progress: a single updating bubble with a subtle working indicator until done.

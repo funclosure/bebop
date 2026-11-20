@@ -3707,7 +3707,8 @@ function goTo(dir) {
   let pinch = null, lastTap = 0, swipeX = 0, swipeY = 0, axis = null, downAt = 0
   const rel = e => { const r = vStage.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top } }
   vStage.addEventListener('pointerdown', e => {
-    if (sliding) return
+    // Only the main button drags: a right-click opens the menu, which keeps the release for itself.
+    if (sliding || (e.pointerType === 'mouse' && e.button !== 0)) return
     vStage.setPointerCapture(e.pointerId)
     pts.set(e.pointerId, rel(e))
     if (pts.size === 2) {
@@ -3719,6 +3720,9 @@ function goTo(dir) {
   })
   vStage.addEventListener('pointermove', e => {
     if (!pts.has(e.pointerId)) return
+    // A press whose release never came (a Control-click's menu takes it) ends at the first move
+    // with the button up, so the picture never follows a mouse that isn't pressed.
+    if (e.pointerType === 'mouse' && !(e.buttons & 1)) { lost(e); return }
     const prev = pts.get(e.pointerId), cur = rel(e)
     pts.set(e.pointerId, cur)
     if (pts.size === 2 && pinch) {
@@ -3754,6 +3758,10 @@ function goTo(dir) {
       const now = Date.now()
       if (now - lastTap < 300) { zoomAt(p.x, p.y, viewer.s > 1 ? 1 : 2.5); lastTap = 0 } else lastTap = now
     }
+  }
+  const lost = e => {
+    if (vStage.hasPointerCapture(e.pointerId)) vStage.releasePointerCapture(e.pointerId)
+    up({ type: 'pointercancel', pointerId: e.pointerId })
   }
   vStage.addEventListener('pointerup', up)
   vStage.addEventListener('pointercancel', up)
@@ -4231,7 +4239,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v132'
+const APP_VERSION = 'v133'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
