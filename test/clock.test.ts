@@ -200,3 +200,15 @@ test('renderTimers: one line each', () => {
     .toBe('#3 2026-11-18T09:00:00+08:00 (weekly) key=task:x (release) fired 2×: Ask')
   expect(renderTimers([{ id: 4, state: 'cancelled', changed_by: 'user', due_local: '', fires: 0, text: 'Gone' }])).toBe('#4 cancelled by user: Gone')
 })
+
+test('the app: a fired timer\'s text takes the line; the topic and time wrap under it, the topic cut short, never the text', async () => {
+  const web = (f: string) => Bun.file(join(import.meta.dir, '..', 'web', f)).text()
+  const app = await web('app.js'), css = await web('style.css')
+  const line = app.slice(app.indexOf('function buildTimerLine('), app.indexOf('\n}\n', app.indexOf('function buildTimerLine(')))
+  // Late, topic and time are one group after the text (a long topic title once left the text no width on a phone).
+  expect(line.indexOf("class: 'note-text'")).toBeLessThan(line.indexOf("class: 'note-meta'"))
+  expect(line.slice(line.indexOf("class: 'note-meta'"))).toContain('threadTag(m)')
+  expect(css).toContain('.note-line { display: flex; flex-wrap: wrap;')
+  expect(css).toContain('.note-line .note-text { flex: 1 1 12em; min-width: 0; overflow-wrap: anywhere; }')
+  expect(css).toContain('.note-meta > .thread-tag { flex: 0 1 auto; min-width: 0; max-width: 18em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }')
+})

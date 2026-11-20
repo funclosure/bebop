@@ -630,9 +630,14 @@ details.note-card[open] > summary .note-first, details.note-card[open] > summary
 .note-more { font-size: 12.5px; color: var(--accent); }
 .note-body { color: var(--text); padding-top: 4px; overflow-wrap: anywhere; }
 .note-body .md > :first-child { margin-top: 0; }
-.note-line { display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 13px; padding: 0 4px; min-width: 0; }
-.note-line .note-icon { display: inline-flex; flex: none; }
-.note-line .note-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* A timer's line: the text takes the room. The topic and time keep to the end of the line, and wrap under the text,
+   right-aligned, when they don't fit beside it; a long topic title is cut short there, never the text. */
+.note-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--faint); font-size: 13px; padding: 0 4px; min-width: 0; }
+.note-line .note-icon { display: inline-flex; flex: none; align-self: flex-start; margin-top: 1px; }
+.note-line .note-text { flex: 1 1 12em; min-width: 0; overflow-wrap: anywhere; }
+.note-meta { display: flex; align-items: baseline; gap: 6px; margin-left: auto; min-width: 0; max-width: 100%; }
+.note-meta > * { flex: none; }
+.note-meta > .thread-tag { flex: 0 1 auto; min-width: 0; max-width: 18em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .note-late { font-size: 11.5px; border: 1px solid var(--warn); color: var(--warn); border-radius: 999px; padding: 0 6px; }
 .note-head .thread-tag, .note-line .thread-tag { font-size: 12px; }
 .pill-btn.small { padding: 4px 12px; font-size: 13.5px; flex: none; }
@@ -1177,7 +1182,19 @@ body.col-dragging iframe { pointer-events: none; }
 .usage.warn .usage-pct { color: var(--warn); }
 .usage.alert .usage-pct { color: var(--alert); }
 .side-usage { flex: none; margin: 0 8px 4px; padding: 10px 10px 8px; border-top: 1px solid var(--line); }
-.panes-usage { margin: 4px 16px 14px; padding: 12px 14px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.panes-usage { margin: 0 6px; padding: 10px 0 11px; border-bottom: 1px solid var(--line); }
+/* In Sessions: a flat strip lined up with the rows under it, the label, the reset and the percent on one line over the bar
+   (an old report's "as of" needs the room: then the reset line goes under the bar). */
+.panes-usage .usage { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: 7px 0; }
+.panes-usage .usage + .usage { margin-top: 10px; }
+.panes-usage .usage-top { display: contents; }
+.panes-usage .usage-label { grid-area: 1 / 1; }
+.panes-usage .usage-sub { grid-area: 1 / 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panes-usage .usage-sub::before { content: '·'; margin: 0 5px; }
+.panes-usage .usage.stale .usage-sub { grid-area: 3 / 1 / 4 / -1; margin-top: -2px; }
+.panes-usage .usage.stale .usage-sub::before { content: none; }
+.panes-usage .usage-pct { grid-area: 1 / 3; padding-left: 8px; }
+.panes-usage .usage-bar { grid-area: 2 / 1 / 3 / -1; }
 .topics-usage { flex: none; margin: 0 -14px; padding: 12px 18px 0; border-top: 1px solid var(--line); }
 /* Hidden, the foot doesn't count: the list still runs to the sheet's bottom edge. */
 .sheet:has(> .sheet-body + .sheet-foot[hidden]:last-child) { padding-bottom: 0; }

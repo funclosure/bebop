@@ -128,6 +128,12 @@ test('the app: a meter per current window in the sidebar, Sessions and the Topic
   // On wide windows Sessions doesn't repeat the sidebar's; a hidden foot leaves the sheet's list to the bottom edge.
   expect(css).toContain('@media (min-width: 900px) { .panes-usage { display: none; } }')
   expect(css).toContain('.sheet:has(> .sheet-body + .sheet-foot[hidden]:last-child) { padding-bottom: 0; }')
+  // Sessions on the phone: no card, lined up with the rows (the list's 8px + 6px), two lines.
+  expect(css).toContain('.panes-usage { margin: 0 6px; padding: 10px 0 11px; border-bottom: 1px solid var(--line); }')
+  expect(css).toContain('.panes-usage .usage-top { display: contents; }')
+  expect(css).toContain('.panes-usage .usage-bar { grid-area: 2 / 1 / 3 / -1; }')
+  expect(css).toContain('.panes-usage .usage.stale .usage-sub { grid-area: 3 / 1 / 4 / -1; margin-top: -2px; }')
+  expect(meter).toContain("${ago > USAGE_STALE ? ' stale' : ''}")
 })
 
 test('the app\'s words for it', async () => {

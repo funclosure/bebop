@@ -621,9 +621,11 @@ function buildTimerLine(m) {
     h('div', { class: 'note-line' },
       h('span', { class: 'note-icon', html: ICON_CLOCK }),
       h('span', { class: 'note-text' }, S.timerFired(agentName(), plainPreview(b.text ?? ''))),
-      b.late ? h('span', { class: 'note-late', title: S.timerLateTitle }, S.timerLate) : null,
-      threadTag(m),
-      h('span', { class: 'note-time' }, timeFmt.format(m.ts))))
+      // The end of the line; when the text needs the room (a phone, a long topic title) it goes under it.
+      h('span', { class: 'note-meta' },
+        b.late ? h('span', { class: 'note-late', title: S.timerLateTitle }, S.timerLate) : null,
+        threadTag(m),
+        h('span', { class: 'note-time' }, timeFmt.format(m.ts)))))
 }
 
 function buildNode(m) {
@@ -1209,7 +1211,7 @@ function usageMeter(key, w, now) {
   // How much of the window has gone: a bar that ends left of the mark is under pace.
   const gone = Math.max(0, Math.min(100, 100 - (w.resets_at * 1000 - now) / USAGE_SPAN[key] * 100))
   const ago = Math.max(0, now - w.updated * 1000)
-  return h('div', { class: `usage${usageLevel(pct)}`, role: 'meter', 'aria-label': S.usageWindow[key], 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': pct, title: S.usageNote(ago) },
+  return h('div', { class: `usage${usageLevel(pct)}${ago > USAGE_STALE ? ' stale' : ''}`, role: 'meter', 'aria-label': S.usageWindow[key], 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': pct, title: S.usageNote(ago) },
     h('div', { class: 'usage-top' }, h('span', { class: 'usage-label' }, S.usageWindow[key]), h('span', { class: 'usage-pct' }, `${pct}%`)),
     h('div', { class: 'usage-bar', 'aria-hidden': 'true' }, h('i', { style: `width:${pct}%` }), h('b', { style: `left:${gone.toFixed(1)}%` })),
     h('div', { class: 'usage-sub' }, [usageReset(w.resets_at, now), ago > USAGE_STALE ? S.usageAsOf(ago) : null].filter(Boolean).join(' · ')))
@@ -4215,7 +4217,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v124'
+const APP_VERSION = 'v125'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every
