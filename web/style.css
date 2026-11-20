@@ -1141,7 +1141,7 @@ body.col-dragging iframe { pointer-events: none; }
 .all-topic.current { background: var(--surface-2); border-radius: 10px; }
 
 /* Wide windows: the topic row takes the top bar's empty left side, so the conversation has one
-   header row (the sidebar is the way back). Inside a topic it names the topic, with its session,
+   header row. Inside a topic it names the topic after ‹ back to All (as on the phone), with its session,
    tools and Archive; in All it names the topic of the message at the top of the list, or the
    agent when that message has none. The app's buttons stay on the right. */
 .tb-act { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 10px; border: 0; border-radius: 10px; background: none; color: var(--muted); font-size: 14px; white-space: nowrap; }
@@ -1162,7 +1162,8 @@ body.col-dragging iframe { pointer-events: none; }
   .topic-bar .tb-icon { width: 32px; height: 32px; }
   .topic-bar .tb-session { width: 40px; height: 40px; }
   .topic-bar .tb-session .state-dot { bottom: 7px; right: 4px; }
-  .tb-main:not(.static):hover, .tb-session:hover, .tb-act:hover, .tb-menu:hover { background: var(--surface-2); }
+  .topic-bar .tb-back { height: 40px; min-width: 36px; padding: 0 9px 0 8px; margin-right: -2px; }
+  .tb-main:not(.static):hover, .tb-back:hover, .tb-session:hover, .tb-act:hover, .tb-menu:hover { background: var(--surface-2); }
   .tb-main.static .tb-title { font-weight: 600; }
 }
 /* A narrow conversation (a project's column and a tool beside it): Archive is its icon. */

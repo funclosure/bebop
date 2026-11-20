@@ -1494,8 +1494,8 @@ function renderNav() {
 // Inside a topic one row names it: its project's icon, the whole title, project · next step, and
 // the session behind it (one tap to its terminal). On the phone the row sits under the top bar,
 // after ‹ back to All, with ⋯ (Open app, tools, the project's page, Archive), and a tap on the
-// topic opens its project's page. On wide windows it takes the top bar's empty left side (the
-// sidebar is the way back), with the tools and Archive as buttons, and a click on the topic shows
+// topic opens its project's page. On wide windows it takes the top bar's empty left side, after
+// the same ‹ back to All, with the tools and Archive as buttons, and a click on the topic shows
 // or hides its project's column. In All the same row names the topic of the message at the top of
 // the list as it scrolls (a tap opens that topic): floating under the top bar on the phone, in
 // the top bar on wide windows.
@@ -1573,16 +1573,23 @@ new MutationObserver(() => { topicPin.nodes = null }).observe(messagesEl, { chil
 // text never overlaps. dir 1: up (the new from the bottom edge), -1: down (from the top edge),
 // 0: no motion. Reduced motion: a short fade, no movement.
 const ROW_MOVE = { duration: 280, easing: 'cubic-bezier(.25,.8,.25,1)' }
-function swapRow(host, key, nodes, dir) {
-  for (const n of [...host.children]) if (!n.classList.contains('tb-row') || n.classList.contains('leaving')) n.remove() // a ‹ from the phone, a row still leaving
+// `lead` (the wide ‹) stays before the row and doesn't move with it; without one, any ‹ goes.
+function swapRow(host, key, nodes, dir, lead = null) {
+  for (const n of host.querySelectorAll(':scope > .tb-row.leaving')) n.remove() // a row still leaving
   const cur = host.querySelector(':scope > .tb-row')
+  // Where the old row is now, before a ‹ comes or goes beside it (it leaves from there).
+  const r = cur?.getBoundingClientRect(), hr = host.getBoundingClientRect()
+  for (const n of [...host.children]) if (n !== cur && n !== lead) n.remove() // a ‹ from the phone, or one not wanted now
+  if (lead && host.firstChild !== lead) {
+    host.prepend(lead)
+    lead.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160 })
+  }
   if (cur && host.dataset.topic === key) return cur.replaceChildren(...nodes)
   host.dataset.topic = key
   const row = h('div', { class: 'tb-row' }, ...nodes)
   if (!cur) return host.append(row)
   if (!dir || !host.getClientRects().length) return cur.replaceWith(row) // hidden: nothing to see move
-  // The old row leaves from where it is, out of the flow, measured before the new one takes its place.
-  const r = cur.getBoundingClientRect(), hr = host.getBoundingClientRect()
+  // The old row leaves from where it was, out of the flow, measured before the new one takes its place.
   Object.assign(cur.style, { position: 'absolute', left: `${r.left - hr.left}px`, top: `${r.top - hr.top}px`, width: `${r.width}px`, height: `${r.height}px` })
   cur.classList.add('leaving')
   cur.inert = true
@@ -1594,6 +1601,9 @@ function swapRow(host, key, nodes, dir) {
     .finished.then(() => cur.remove(), () => cur.remove())
   row.animate([{ opacity: 0, transform: y(100 * dir) }, { opacity: 1, transform: 'none' }], timing)
 }
+// Wide windows, inside a topic: ‹ back to All, as on the phone (the same as the agent's row in the sidebar).
+const wideBack = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, title: S.allMessages, onclick: () => switchThread(null) },
+  h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
 function renderTopicBar() {
   const bar = $('topic-bar'), on = state.thread != null, inBar = wide.matches && !state.home
   bar.hidden = !on && !inBar
@@ -1604,7 +1614,7 @@ function renderTopicBar() {
     const p = topicProject()
     const row = topicRow(state.thread, p ? () => toggleProjectColumn(p.key) : null, null, topicActions(curTopic()))
     if (p) row[0].setAttribute('aria-expanded', String(columnShown(p.key)))
-    swapRow(bar, state.thread, row, 1) // another topic opened: it comes up from the bottom edge
+    swapRow(bar, state.thread, row, 1, wideBack) // another topic opened: it comes up from the bottom edge
   } else if (on) {
     const p = topicProject()
     const back = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, onclick: () => switchThread(null) }, h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
@@ -4217,7 +4227,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v125'
+const APP_VERSION = 'v126'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every

@@ -137,10 +137,24 @@ test('another topic slides in by one edge as the old one leaves by the other; th
   expect(app).toContain('if (top !== topicPin.top) topicPin.dir = top > topicPin.top ? 1 : -1')
   // Opening another topic on a wide window: from the bottom. On the phone a topic opens from a sheet: no motion.
   const bar = body(app, 'function renderTopicBar(')
-  expect(bar).toContain('swapRow(bar, state.thread, row, 1)')
+  expect(bar).toContain('swapRow(bar, state.thread, row, 1, wideBack)')
   expect(bar).toContain("bar.replaceChildren(back, h('div', { class: 'tb-row' }, ...main))")
   // The phone's floating row moves the same way, but just appears after messages with no topic.
   expect(body(app, 'function updatePin(')).toContain('el.hidden ? 0 : topicPin.dir')
   // The bar clips the rows at its edges.
   expect(css).toContain('.topic-bar { position: relative; overflow: hidden;')
+})
+
+test('wide windows: ‹ back to All before the topic, as on the phone; it stays put while another topic slides in, and goes in All', async () => {
+  const app = await web('app.js'), css = await web('style.css')
+  // The same as the agent's row in the sidebar: All, closing a project's column or a session.
+  expect(app).toContain("const wideBack = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, title: S.allMessages, onclick: () => switchThread(null) }")
+  const swap = body(app, 'function swapRow(')
+  // The leaving row is measured before the ‹ comes or goes beside it, so it leaves from where it was.
+  expect(swap.indexOf('const r = cur?.getBoundingClientRect(), hr = host.getBoundingClientRect()')).toBeLessThan(swap.indexOf('if (n !== cur && n !== lead) n.remove()'))
+  expect(swap).toContain('if (lead && host.firstChild !== lead) {')
+  // In All (wide) the row is swapped with no lead: the ‹ goes.
+  expect(body(app, 'function updatePin(')).toContain('allRow(), topicPin.dir)')
+  expect(css).toContain('.topic-bar .tb-back { height: 40px;')
+  expect(css).toContain('.tb-back:hover')
 })
