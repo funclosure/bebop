@@ -667,7 +667,8 @@ function buildNode(m) {
   return el
 }
 
-function threadTitle(id) { return state.threads.find(t => t.id === id)?.title ?? id }
+// A project's conversation that has no messages yet isn't in the list: its name, not its id.
+function threadTitle(id) { return state.threads.find(t => t.id === id)?.title ?? (projectOfThread(id) ? S.projectChat : id) }
 
 // A day header is also the date picker: a transparent native <input type="date"> lies
 // over the label, so a tap opens the system picker (iOS opens it for a tap on the input
@@ -1309,17 +1310,22 @@ function newConversationRow(key, pick) {
 }
 // A view's open topics in sort order. Archived ones are never here, so they can't be picked.
 const viewTopics = view => view.kind === 'sessions' ? [] : view.kind === 'needs' ? needsTopics() : openTopics().filter(t => projectKey(filedProject(t)) === view.key).sort(byDot)
+// Wide windows, a column open (a project, Needs you, Sessions): ‹ back to All starts the column's
+// header, at the left edge of what's beside the sidebar; the conversation's header has none then.
+const colBack = h('button', { type: 'button', class: 'tb-back col-back', 'aria-label': S.allMessages, title: S.allMessages, onclick: () => switchThread(null) },
+  h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
 // A project's column, or Needs you: the same contents beside the conversation and in the sheet.
 function homeNodes(view, pick, term, column = false) {
+  const back = column ? colBack : null // the sheet on the phone has its own way back
   if (view.kind === 'sessions') {
     const all = [...panes.list].sort(byPaneDot)
-    return [h('div', { class: 'home-head' }, h('h2', {}, S.sessions), shareButton()), ...all.map(sessionItem), all.length ? null : h('p', { class: 'home-empty' }, S.noPanes)].filter(Boolean)
+    return [h('div', { class: 'home-head' }, back, h('h2', {}, S.sessions), shareButton()), ...all.map(sessionItem), all.length ? null : h('p', { class: 'home-empty' }, S.noPanes)].filter(Boolean)
   }
   const p = view.kind === 'project' ? projectList().find(x => x.key === view.key) : null
   const name = p?.name ?? (view.kind === 'needs' ? S.needsYou : S.projectName(view.key ?? ''))
   const sessions = view.kind === 'needs' ? blockedSessions() : p?.sessions ?? sessionsOf(view.key)
   const topics = view.kind === 'needs' ? needsTopics() : p?.topics ?? []
-  const head = h('div', { class: 'home-head' }, view.kind === 'needs' ? h('span', { class: 'home-icon proj-slot' }, dotEl('red')) : projectIcon(p ?? { name }, 'home-icon'), h('h2', {}, name),
+  const head = h('div', { class: 'home-head' }, back, view.kind === 'needs' ? h('span', { class: 'home-icon proj-slot' }, dotEl('red')) : projectIcon(p ?? { name }, 'home-icon'), h('h2', {}, name),
       view.kind === 'project' ? projectLinkButton(view.key) : null,
       view.kind === 'project' ? projectToolButtons(view.key, name) : null)
   if (view.kind === 'project') attachLinkEditor(head, view.key, name)
@@ -1613,7 +1619,8 @@ function swapRow(host, key, nodes, dir, lead = null) {
     .finished.then(() => cur.remove(), () => cur.remove())
   row.animate([{ opacity: 0, transform: y(100 * dir) }, { opacity: 1, transform: 'none' }], timing)
 }
-// Wide windows, inside a topic: ‹ back to All, as on the phone (the same as the agent's row in the sidebar).
+// Wide windows, inside a topic: ‹ back to All, as on the phone (the same as the agent's row in the
+// sidebar). With a column open it starts the column's header instead (colBack).
 const wideBack = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, title: S.allMessages, onclick: () => switchThread(null) },
   h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
 function renderTopicBar() {
@@ -1626,7 +1633,7 @@ function renderTopicBar() {
     const p = topicProject()
     const row = topicRow(state.thread, p ? () => toggleProjectColumn(p.key) : null, null, topicActions(curTopic()))
     if (p) row[0].setAttribute('aria-expanded', String(columnShown(p.key)))
-    swapRow(bar, state.thread, row, 1, wideBack) // another topic opened: it comes up from the bottom edge
+    swapRow(bar, state.thread, row, 1, state.home ? null : wideBack) // another topic opened: it comes up from the bottom edge
   } else if (on) {
     const p = topicProject()
     const back = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, onclick: () => switchThread(null) }, h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
@@ -4239,7 +4246,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v127'
+const APP_VERSION = 'v129'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every

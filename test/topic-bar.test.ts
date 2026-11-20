@@ -137,7 +137,7 @@ test('another topic slides in by one edge as the old one leaves by the other; th
   expect(app).toContain('if (top !== topicPin.top) topicPin.dir = top > topicPin.top ? 1 : -1')
   // Opening another topic on a wide window: from the bottom. On the phone a topic opens from a sheet: no motion.
   const bar = body(app, 'function renderTopicBar(')
-  expect(bar).toContain('swapRow(bar, state.thread, row, 1, wideBack)')
+  expect(bar).toContain('swapRow(bar, state.thread, row, 1, state.home ? null : wideBack)')
   expect(bar).toContain("bar.replaceChildren(back, h('div', { class: 'tb-row' }, ...main))")
   // The phone's floating row moves the same way, but just appears after messages with no topic.
   expect(body(app, 'function updatePin(')).toContain('el.hidden ? 0 : topicPin.dir')
@@ -157,4 +157,27 @@ test('wide windows: ‹ back to All before the topic, as on the phone; it stays 
   expect(body(app, 'function updatePin(')).toContain('allRow(), topicPin.dir)')
   expect(css).toContain('.topic-bar .tb-back { height: 40px;')
   expect(css).toContain('.tb-back:hover')
+})
+
+test('wide windows, a column open: the ‹ starts the column\'s header, not the conversation\'s', async () => {
+  const app = await web('app.js'), css = await web('style.css')
+  // The same button and action as the conversation header's (it's a .tb-back, so it hovers the same).
+  expect(app).toContain("const colBack = h('button', { type: 'button', class: 'tb-back col-back', 'aria-label': S.allMessages, title: S.allMessages, onclick: () => switchThread(null) }")
+  const nodes = body(app, 'function homeNodes(')
+  expect(nodes).toContain('const back = column ? colBack : null') // only beside the conversation; the phone's sheet has its own back
+  // First in every column's header: a project's and Needs you, and Sessions.
+  expect(nodes).toContain("h('div', { class: 'home-head' }, back, view.kind === 'needs'")
+  expect(nodes).toContain("h('div', { class: 'home-head' }, back, h('h2', {}, S.sessions)")
+  // The conversation's header has none while a column is open; it comes back when the column closes.
+  expect(body(app, 'function renderTopicBar(')).toContain('state.home ? null : wideBack')
+  // Sized like the header's, at the column's left edge.
+  expect(css).toContain('.home .col-back { height: 40px; min-width: 36px; padding: 0 9px 0 8px; margin: 0 -3px 0 -10px; }')
+})
+
+test('a project with no icon: its initial centred in the header\'s tile; a new project conversation is named, not its id', async () => {
+  const app = await web('app.js'), css = await web('style.css')
+  // .tb-icon (display: block) comes after .proj-initial (display: grid), so the tile says grid itself, as .home-icon's does.
+  expect(css).toContain('.tb-icon.proj-initial { display: grid; font-size: 13px; }')
+  expect(css.indexOf('.tb-icon.proj-initial {')).toBeGreaterThan(css.indexOf('.tb-icon { flex: none; display: block;'))
+  expect(app).toContain('?.title ?? (projectOfThread(id) ? S.projectChat : id)')
 })
