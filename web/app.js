@@ -614,18 +614,30 @@ function buildPeerNote(m) {
     h('div', { class: 'note-body' }, renderFiles(m), text.trim() ? renderMarkdownBlock(text, false) : null)))
   return el
 }
-// One of the agent's timers came due.
+// One of the agent's timers came due: a message from the clock, laid out like the others (a sender
+// line: a clock, "Timer for <agent>", "late" when it was, the topic, the time), the text in a quiet
+// dashed bubble, cut to three lines with Show more when it's longer.
 function buildTimerLine(m) {
   const b = m.body
-  return h('div', { class: 'msg note timer-note', id: `m${m.id}`, 'data-id': m.id },
-    h('div', { class: 'note-line' },
-      h('span', { class: 'note-icon', html: ICON_CLOCK }),
-      h('span', { class: 'note-text' }, S.timerFired(agentName(), plainPreview(b.text ?? ''))),
-      // The end of the line; when the text needs the room (a phone, a long topic title) it goes under it.
-      h('span', { class: 'note-meta' },
-        b.late ? h('span', { class: 'note-late', title: S.timerLateTitle }, S.timerLate) : null,
-        threadTag(m),
-        h('span', { class: 'note-time' }, timeFmt.format(m.ts)))))
+  const text = (b.text ?? '').split('\n').map(l => plainPreview(l)).filter(Boolean).join('\n')
+  const el = h('div', { class: 'msg clock', id: `m${m.id}`, 'data-id': m.id })
+  el.append(h('div', { class: 'meta-line' },
+    h('span', { class: 'sender' }, h('span', { class: 'clock-icon', html: ICON_CLOCK }), h('span', { class: 'sender-name' }, S.timerFor(agentName()))),
+    b.late ? h('span', { class: 'note-late', title: S.timerLateTitle }, S.timerLate) : null,
+    threadTag(m),
+    h('span', {}, timeFmt.format(m.ts))))
+  const body = h('div', { class: 'timer-text' }, text)
+  const bubble = h('div', { class: 'bubble timer-bubble' }, body)
+  if (text.length > 120 || text.split('\n').length > 3) {
+    body.classList.add('cut')
+    const btn = h('button', { class: 'toggle-more', type: 'button' }, S.showMore)
+    btn.onclick = e => { e.stopPropagation(); const cut = body.classList.toggle('cut'); btn.textContent = cut ? S.showMore : S.showLess }
+    bubble.append(btn)
+    // On the page: no Show more when three lines hold it all (a wide window).
+    requestAnimationFrame(() => { if (body.isConnected && body.clientHeight && body.scrollHeight <= body.clientHeight + 1) { body.classList.remove('cut'); btn.remove() } })
+  }
+  el.append(h('div', { class: 'bubble-wrap' }, bubble))
+  return el
 }
 
 function buildNode(m) {
@@ -4227,7 +4239,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v126'
+const APP_VERSION = 'v127'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every

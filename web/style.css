@@ -616,8 +616,9 @@ a.pill-btn { color: var(--text); text-decoration: none; }
 .timer-actions { display: flex; gap: 6px; flex: none; }
 .timer-actions .danger { color: var(--alert); border-color: var(--alert); }
 
-/* Notes to the agent that are neither the user's nor the agent's: a peer's note, a timer going off.
-   Quiet and full width, so they read as passing by, not as a turn in the conversation. */
+/* A project session's note to the agent, neither the user's nor the agent's: quiet and full width,
+   so it reads as passing by, not as a turn in the conversation. (A timer going off is a message from
+   the clock: below.) */
 .msg.note { align-items: stretch; margin: 6px 0; }
 .note-card { border: 1px dashed var(--line); border-radius: 12px; padding: 7px 12px; color: var(--muted); font-size: 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 details.note-card > summary { list-style: none; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
@@ -630,16 +631,16 @@ details.note-card[open] > summary .note-first, details.note-card[open] > summary
 .note-more { font-size: 12.5px; color: var(--accent); }
 .note-body { color: var(--text); padding-top: 4px; overflow-wrap: anywhere; }
 .note-body .md > :first-child { margin-top: 0; }
-/* A timer's line: the text takes the room. The topic and time keep to the end of the line, and wrap under the text,
-   right-aligned, when they don't fit beside it; a long topic title is cut short there, never the text. */
-.note-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; color: var(--faint); font-size: 13px; padding: 0 4px; min-width: 0; }
-.note-line .note-icon { display: inline-flex; flex: none; align-self: flex-start; margin-top: 1px; }
-.note-line .note-text { flex: 1 1 12em; min-width: 0; overflow-wrap: anywhere; }
-.note-meta { display: flex; align-items: baseline; gap: 6px; margin-left: auto; min-width: 0; max-width: 100%; }
-.note-meta > * { flex: none; }
-.note-meta > .thread-tag { flex: 0 1 auto; min-width: 0; max-width: 18em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A fired timer: a message from the clock (buildTimerLine), quieter than the agent's: a dashed
+   bubble with no fill, muted text, cut to three lines with Show more. */
+.msg.clock { align-items: flex-start; }
+.msg.clock .clock-icon { display: inline-flex; color: var(--faint); }
+.msg.clock .bubble { border-bottom-left-radius: 6px; }
+.timer-bubble { background: none; border-style: dashed; box-shadow: none; color: var(--muted); font-size: 14.5px; padding: 8px 13px; }
+.timer-text { white-space: pre-line; overflow-wrap: anywhere; }
+.timer-text.cut { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .note-late { font-size: 11.5px; border: 1px solid var(--warn); color: var(--warn); border-radius: 999px; padding: 0 6px; }
-.note-head .thread-tag, .note-line .thread-tag { font-size: 12px; }
+.note-head .thread-tag { font-size: 12px; }
 .pill-btn.small { padding: 4px 12px; font-size: 13.5px; flex: none; }
 
 /* Search: a full view over the app */

@@ -201,14 +201,22 @@ test('renderTimers: one line each', () => {
   expect(renderTimers([{ id: 4, state: 'cancelled', changed_by: 'user', due_local: '', fires: 0, text: 'Gone' }])).toBe('#4 cancelled by user: Gone')
 })
 
-test('the app: a fired timer\'s text takes the line; the topic and time wrap under it, the topic cut short, never the text', async () => {
+test('the app: a fired timer is a message from the clock: a sender line, the text in a quiet bubble, three lines then Show more', async () => {
   const web = (f: string) => Bun.file(join(import.meta.dir, '..', 'web', f)).text()
   const app = await web('app.js'), css = await web('style.css')
-  const line = app.slice(app.indexOf('function buildTimerLine('), app.indexOf('\n}\n', app.indexOf('function buildTimerLine(')))
-  // Late, topic and time are one group after the text (a long topic title once left the text no width on a phone).
-  expect(line.indexOf("class: 'note-text'")).toBeLessThan(line.indexOf("class: 'note-meta'"))
-  expect(line.slice(line.indexOf("class: 'note-meta'"))).toContain('threadTag(m)')
-  expect(css).toContain('.note-line { display: flex; flex-wrap: wrap;')
-  expect(css).toContain('.note-line .note-text { flex: 1 1 12em; min-width: 0; overflow-wrap: anywhere; }')
-  expect(css).toContain('.note-meta > .thread-tag { flex: 0 1 auto; min-width: 0; max-width: 18em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }')
+  const i = app.indexOf('function buildTimerLine('), timer = app.slice(i, app.indexOf('\n}\n', i))
+  expect(timer).toContain("h('div', { class: 'msg clock', id: `m${m.id}`, 'data-id': m.id })")
+  // The sender line, as on other messages; the topic tag there shrinks first (.meta-line > .thread-tag).
+  expect(timer).toContain("h('span', { class: 'sender' }, h('span', { class: 'clock-icon', html: ICON_CLOCK }), h('span', { class: 'sender-name' }, S.timerFor(agentName())))")
+  expect(timer).toContain('threadTag(m)')
+  expect(timer).toContain("h('div', { class: 'bubble timer-bubble' }, body)")
+  // Cut to three lines, with no Show more when three lines hold it all.
+  expect(timer).toContain('if (body.isConnected && body.clientHeight && body.scrollHeight <= body.clientHeight + 1) { body.classList.remove(\'cut\'); btn.remove() }')
+  expect(css).toContain('.timer-text.cut { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }')
+  expect(css).toContain('.timer-bubble { background: none; border-style: dashed;')
+  // The old line, the prototype's other layouts and its switch are gone.
+  for (const gone of ['note-line', 'note-meta', 'TIMER_LAYOUT', 'timerCard', 'timerEvent']) expect(app).not.toContain(gone)
+  for (const gone of ['.note-line', '.note-meta', '.timer-card', '.ev-head']) expect(css).not.toContain(gone)
+  const { S: words } = await import('../web/strings.js')
+  expect(words.timerFor('Faye')).toBe('Timer for Faye')
 })
