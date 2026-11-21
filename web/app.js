@@ -1172,6 +1172,10 @@ function agentRow(name, current, unread) {
       dotEl(agentDot())),
     n ? h('button', { type: 'button', class: `agent-tasks${state.tasks.some(x => x.state === 'running') ? ' running' : ''}`, title: S.tasksLabel(n.active, n.running), 'aria-label': S.tasksLabel(n.active, n.running), 'aria-haspopup': 'dialog', onclick: openTasks }, String(n.active)) : null)
 }
+// ‹ back to All (the phone's header, the wide header and a column's): a drawn chevron, tall and
+// round-ended like the system's back chevron, in place of the thin ‹ character. One for all three.
+const ICON_BACK = '<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15.5 4-8 8 8 8" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+const backChev = () => h('span', { class: 'tb-chev', html: ICON_BACK })
 const ICON_TERMINAL = '<svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="m7.5 10 2.5 2-2.5 2M12.5 14.5h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>'
 // An agent session's mark: a neutral sparkle (not any vendor's logo, so Bebop ships it);
 // one per agent later (codex, pi…). >_ is kept for plain terminals.
@@ -1313,7 +1317,7 @@ const viewTopics = view => view.kind === 'sessions' ? [] : view.kind === 'needs'
 // Wide windows, a column open (a project, Needs you, Sessions): ‹ back to All starts the column's
 // header, at the left edge of what's beside the sidebar; the conversation's header has none then.
 const colBack = h('button', { type: 'button', class: 'tb-back col-back', 'aria-label': S.allMessages, title: S.allMessages, onclick: () => switchThread(null) },
-  h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
+  backChev())
 // A project's column, or Needs you: the same contents beside the conversation and in the sheet.
 function homeNodes(view, pick, term, column = false) {
   const back = column ? colBack : null // the sheet on the phone has its own way back
@@ -1607,7 +1611,7 @@ function swapRow(host, key, nodes, dir, lead = null) {
 // Wide windows, inside a topic: ‹ back to All, as on the phone (the same as the agent's row in the
 // sidebar). With a column open it starts the column's header instead (colBack).
 const wideBack = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, title: S.allMessages, onclick: () => switchThread(null) },
-  h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
+  backChev())
 function renderTopicBar() {
   const bar = $('topic-bar'), on = state.thread != null, inBar = wide.matches && !state.home
   bar.hidden = !on && !inBar
@@ -1621,7 +1625,7 @@ function renderTopicBar() {
     swapRow(bar, state.thread, row, 1, state.home ? null : wideBack) // another topic opened: it comes up from the bottom edge
   } else if (on) {
     const p = topicProject()
-    const back = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, onclick: () => switchThread(null) }, h('span', { class: 'tb-chev', 'aria-hidden': 'true' }, '‹'))
+    const back = h('button', { type: 'button', class: 'tb-back', 'aria-label': S.allMessages, onclick: () => switchThread(null) }, backChev())
     const main = topicRow(state.thread, () => openTopicsSheet(p ? { kind: 'project', key: p.key } : null), ICON_CHEVRON_DOWN)
     main[0].setAttribute('aria-haspopup', 'dialog')
     bar.replaceChildren(back, h('div', { class: 'tb-row' }, ...main)) // opened from a sheet: no motion
@@ -4239,7 +4243,7 @@ function removePasskey(p, mine) {
 }
 
 /** This app's version: web/sw.js caches it as `shell-<APP_VERSION>`. Bump both together. */
-const APP_VERSION = 'v133'
+const APP_VERSION = 'v134'
 
 // ---------- the app's icon: the mark made from the agent's name, and a seed for another one ----------
 // Seed 0 is the name's own; Settings shows nine at a time to pick from. The hub draws every

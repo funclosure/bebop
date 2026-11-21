@@ -171,7 +171,30 @@ test('wide windows, a column open: the ‹ starts the column\'s header, not the 
   // The conversation's header has none while a column is open; it comes back when the column closes.
   expect(body(app, 'function renderTopicBar(')).toContain('state.home ? null : wideBack')
   // Sized like the header's, at the column's left edge.
-  expect(css).toContain('.home .col-back { height: 40px; min-width: 36px; padding: 0 9px 0 8px; margin: 0 -3px 0 -10px; }')
+  expect(css).toContain('.home .col-back { height: 40px; min-width: 36px; padding: 0; margin: 0 -3px 0 -10px; }')
+})
+
+test('the ‹ sits in the middle of its tile (the hover and press background), not 4px left', async () => {
+  const css = await web('style.css')
+  // Centred with no side padding, on the phone, in the wide header and at a column's head; the tile keeps its size.
+  expect(css).toMatch(/\n\.tb-back \{[^}]*justify-content: center;[^}]*height: 44px; min-width: 40px; padding: 0;/)
+  expect(css).toContain('.topic-bar .tb-back { height: 40px; min-width: 36px; padding: 0; margin-right: -2px; }')
+  expect(css).toContain('.home .col-back { height: 40px; min-width: 36px; padding: 0;')
+  expect(css).not.toContain('padding: 0 9px 0 8px')
+})
+
+test('the ‹ is a drawn chevron, the same one on the phone, in the wide header and at a column\'s head', async () => {
+  const app = await web('app.js'), css = await web('style.css')
+  // Tall and round-ended, in the accent colour (currentColor), in place of the thin ‹ character.
+  expect(app).toContain('const ICON_BACK = \'<svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="m15.5 4-8 8 8 8" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>\'')
+  expect(app).toContain("const backChev = () => h('span', { class: 'tb-chev', html: ICON_BACK })")
+  // All three buttons use it; none has the character any more. ICON_BACK comes before colBack, which is built at load.
+  expect(app.match(/backChev\(\)\)/g)?.length).toBe(3)
+  expect(app).not.toContain("'tb-chev', 'aria-hidden': 'true' }, '‹'")
+  expect(app.indexOf('const ICON_BACK')).toBeLessThan(app.indexOf('const colBack'))
+  expect(css).toContain('.tb-chev { display: grid; }')
+  // 24px on the phone, 22px in the wide window's smaller tile.
+  expect(css).toContain('.topic-bar .tb-chev svg, .home .col-back svg { width: 22px; height: 22px; }')
 })
 
 test('a project with no icon: its initial centred in the header\'s tile; a new project conversation is named, not its id', async () => {
